@@ -26,6 +26,7 @@ from ipeo.methods.fixed_pool import (
     source_average_selection,
     target_only_bo_selection,
 )
+from ipeo.methods.budgeted_ipeo import build_budgeted_source_subset, plan_budgeted_source_subset
 from ipeo.methods.ipeo_zero import (
     select_composed_vs_existing_prompt,
     select_existing_prompt_by_invariant_score,
@@ -46,7 +47,12 @@ IPEO_COMPOSED_METHODS = {
     "ipeo_no_cost",
     "ipeo_no_generic_no_cost",
 }
-IPEO_METHODS = IPEO_COMPOSED_METHODS | {"ipeo_select_existing", "ipeo_composed_vs_existing"}
+IPEO_BUDGET_METHODS = {
+    "ipeo_budget_200": 200,
+    "ipeo_budget_500": 500,
+    "ipeo_budget_1000": 1000,
+}
+IPEO_METHODS = IPEO_COMPOSED_METHODS | set(IPEO_BUDGET_METHODS) | {"ipeo_select_existing", "ipeo_composed_vs_existing"}
 FIXED_POOL_METHODS = {
     "original",
     "source_average",
@@ -61,6 +67,9 @@ FIXED_POOL_METHODS = {
     "ipeo_no_generic",
     "ipeo_no_cost",
     "ipeo_no_generic_no_cost",
+    "ipeo_budget_200",
+    "ipeo_budget_500",
+    "ipeo_budget_1000",
     "ipeo_select_existing",
     "ipeo_composed_vs_existing",
 }
@@ -208,41 +217,85 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         val_examples = task.load_split("val", args.num_examples)
         test_examples = task.load_split("test", args.num_examples)
 
-        reporter.status(f"Task {task.task_id}: evaluating source train and source/target validation splits")
-        pool_train_results = evaluate_pool(
-            run_id=run_id,
-            task=task,
-            models=[model_by_id[model_id] for model_id in source_models],
-            pool=pool,
-            examples=train_examples,
-            cache=cache,
-            cost_ledger=cost_ledger,
-            generation_config=generation_config,
-            method="fixed_pool",
-            fold_id=fold_id,
-            seed=args.seed,
-            phase="baseline_optimization",
-            artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_pool_train.jsonl",
-            show_tqdm=settings.use_tqdm,
-            workers=args.workers,
-        )
-        pool_val_results = evaluate_pool(
-            run_id=run_id,
-            task=task,
-            models=models,
-            pool=pool,
-            examples=val_examples,
-            cache=cache,
-            cost_ledger=cost_ledger,
-            generation_config=generation_config,
-            method="fixed_pool",
-            fold_id=fold_id,
-            seed=args.seed,
-            phase="calibration",
-            artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_pool_val.jsonl",
-            show_tqdm=settings.use_tqdm,
-            workers=args.workers,
-        )
+        budget_method_names = fixed_methods & set(IPEO_BUDGET_METHODS)
+        full_ipeo_method_names = fixed_methods & (IPEO_COMPOSED_METHODS | {"ipeo_select_existing", "ipeo_composed_vs_existing"})
+        source_validation_method_names = fixed_methods & {
+            "source_average",
+            "pooled_source",
+            "worst_source_robust",
+            "asha_fixed_pool",
+            "promptbridge_emulation",
+            "best_source_transfer",
+        }
+        target_validation_method_names = fixed_methods & {"target_only_bo_fixed_pool"}
+        budget_plans = {
+            method_name: plan_budgeted_source_subset(
+                pool=pool,
+                train_examples=train_examples,
+                source_model_ids=source_models,
+                budget=budget,
+                seed=args.seed,
+            )
+            for method_name, budget in IPEO_BUDGET_METHODS.items()
+            if method_name in budget_method_names
+        }
+        source_train_pool = pool
+        source_train_examples_for_eval = train_examples
+        source_train_model_ids = source_models
+        if budget_plans and not full_ipeo_method_names:
+            prompt_ids = {prompt_id for plan in budget_plans.values() for prompt_id in plan.prompt_ids}
+            example_ids = {example_id for plan in budget_plans.values() for example_id in plan.example_ids}
+            model_ids_for_budget = {model_id for plan in budget_plans.values() for model_id in plan.source_model_ids}
+            source_train_pool = [prompt for prompt in pool if prompt.prompt_id in prompt_ids]
+            source_train_examples_for_eval = [example for example in train_examples if example.example_id in example_ids]
+            source_train_model_ids = [model_id for model_id in source_models if model_id in model_ids_for_budget]
+
+        pool_train_results = []
+        if full_ipeo_method_names or budget_plans:
+            reporter.status(f"Task {task.task_id}: evaluating source train split")
+            pool_train_results = evaluate_pool(
+                run_id=run_id,
+                task=task,
+                models=[model_by_id[model_id] for model_id in source_train_model_ids],
+                pool=source_train_pool,
+                examples=source_train_examples_for_eval,
+                cache=cache,
+                cost_ledger=cost_ledger,
+                generation_config=generation_config,
+                method="fixed_pool",
+                fold_id=fold_id,
+                seed=args.seed,
+                phase="baseline_optimization",
+                artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_pool_train.jsonl",
+                show_tqdm=settings.use_tqdm,
+                workers=args.workers,
+            )
+        validation_model_ids: list[str] = []
+        if source_validation_method_names:
+            validation_model_ids.extend(source_models)
+        if target_validation_method_names:
+            validation_model_ids.append(fold_target)
+
+        pool_val_results = []
+        if validation_model_ids:
+            reporter.status(f"Task {task.task_id}: evaluating validation split")
+            pool_val_results = evaluate_pool(
+                run_id=run_id,
+                task=task,
+                models=[model_by_id[model_id] for model_id in validation_model_ids],
+                pool=pool,
+                examples=val_examples,
+                cache=cache,
+                cost_ledger=cost_ledger,
+                generation_config=generation_config,
+                method="fixed_pool",
+                fold_id=fold_id,
+                seed=args.seed,
+                phase="calibration",
+                artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_pool_val.jsonl",
+                show_tqdm=settings.use_tqdm,
+                workers=args.workers,
+            )
         pool_results = pool_train_results + pool_val_results
 
         selections: list[MethodSelection] = []
@@ -251,73 +304,136 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         ipeo_composed_prompts: dict[str, PromptCandidate] = {}
         ipeo_existing_selection: MethodSelection | None = None
         ipeo_comparison_selection: MethodSelection | None = None
+        budgeted_source_calls_by_method: dict[str, int] = {}
+        budgeted_dollars_by_method: dict[str, float] = {}
         ipeo_methods = fixed_methods & IPEO_METHODS
         if ipeo_methods:
-            reporter.status(f"Task {task.task_id}: estimating invariant edit effects from {args.model} source environments")
-            invariant_table = estimate_invariant_effects(
-                task_id=task.task_id,
-                source_model_ids=source_models,
-                pool=pool,
-                edits=edits,
-                eval_results=pool_results,
-                config=invariant_config,
-                split="opt",
-                seed=args.seed,
-            )
-            write_jsonl(artifact_dir / "stats" / f"{task.task_id}_invariant_edits.jsonl", invariant_table)
-            ipeo_variant_configs = {
-                "ipeo_zero": {"exclude_generic": False, "exclude_edit_types": set()},
-                "ipeo_no_generic": {"exclude_generic": True, "exclude_edit_types": set()},
-                "ipeo_no_cost": {"exclude_generic": False, "exclude_edit_types": {"cost_reduction"}},
-                "ipeo_no_generic_no_cost": {"exclude_generic": True, "exclude_edit_types": {"cost_reduction"}},
-            }
-            composed_methods_to_build = set(fixed_methods & IPEO_COMPOSED_METHODS)
-            if "ipeo_composed_vs_existing" in fixed_methods:
-                composed_methods_to_build.add("ipeo_zero")
-            for method_name in sorted(composed_methods_to_build):
-                variant = ipeo_variant_configs[method_name]
+            if full_ipeo_method_names:
+                reporter.status(f"Task {task.task_id}: estimating invariant edit effects from {args.model} source environments")
+                invariant_table = estimate_invariant_effects(
+                    task_id=task.task_id,
+                    source_model_ids=source_models,
+                    pool=pool,
+                    edits=edits,
+                    eval_results=pool_results,
+                    config=invariant_config,
+                    split="opt",
+                    seed=args.seed,
+                )
+                write_jsonl(artifact_dir / "stats" / f"{task.task_id}_invariant_edits.jsonl", invariant_table)
+                ipeo_variant_configs = {
+                    "ipeo_zero": {"exclude_generic": False, "exclude_edit_types": set()},
+                    "ipeo_no_generic": {"exclude_generic": True, "exclude_edit_types": set()},
+                    "ipeo_no_cost": {"exclude_generic": False, "exclude_edit_types": {"cost_reduction"}},
+                    "ipeo_no_generic_no_cost": {"exclude_generic": True, "exclude_edit_types": {"cost_reduction"}},
+                }
+                composed_methods_to_build = set(fixed_methods & IPEO_COMPOSED_METHODS)
+                if "ipeo_composed_vs_existing" in fixed_methods:
+                    composed_methods_to_build.add("ipeo_zero")
+                for method_name in sorted(composed_methods_to_build):
+                    variant = ipeo_variant_configs[method_name]
+                    ipeo_prompt, ipeo_selection = select_zero_target_prompt(
+                        task_id=task.task_id,
+                        seed_prompt=pool[0],
+                        edits=edits,
+                        invariant_table=invariant_table,
+                        fold_id=fold_id,
+                        target_model=fold_target,
+                        source_models=source_models,
+                        max_edits_per_prompt=invariant_config.max_edits_per_prompt,
+                        min_sign_agreement=invariant_config.min_sign_agreement,
+                        min_lcb=-0.05,
+                        exclude_generic=variant["exclude_generic"],
+                        exclude_edit_types=variant["exclude_edit_types"],
+                        method_name=method_name,
+                    )
+                    ipeo_prompts.append(ipeo_prompt)
+                    ipeo_composed_prompts[method_name] = ipeo_prompt
+                    if method_name in fixed_methods:
+                        selections.append(ipeo_selection)
+                if fixed_methods & {"ipeo_select_existing", "ipeo_composed_vs_existing"}:
+                    ipeo_existing_selection = select_existing_prompt_by_invariant_score(
+                        task_id=task.task_id,
+                        pool=pool,
+                        invariant_table=invariant_table,
+                        fold_id=fold_id,
+                        target_model=fold_target,
+                        source_models=source_models,
+                    )
+                    if "ipeo_select_existing" in fixed_methods:
+                        selections.append(ipeo_existing_selection)
+                if "ipeo_composed_vs_existing" in fixed_methods and ipeo_existing_selection is not None:
+                    ipeo_comparison_selection = select_composed_vs_existing_prompt(
+                        task_id=task.task_id,
+                        composed_prompt=ipeo_composed_prompts["ipeo_zero"],
+                        existing_selection=ipeo_existing_selection,
+                        pool=pool,
+                        invariant_table=invariant_table,
+                        fold_id=fold_id,
+                        target_model=fold_target,
+                        source_models=source_models,
+                    )
+                    selections.append(ipeo_comparison_selection)
+            for method_name, budget in sorted(IPEO_BUDGET_METHODS.items(), key=lambda item: item[1]):
+                if method_name not in fixed_methods:
+                    continue
+                subset = build_budgeted_source_subset(
+                    pool=pool,
+                    train_examples=train_examples,
+                    source_model_ids=source_models,
+                    pool_train_results=pool_train_results,
+                    budget=budget,
+                    seed=args.seed,
+                )
+                budget_table = estimate_invariant_effects(
+                    task_id=task.task_id,
+                    source_model_ids=subset.source_model_ids,
+                    pool=subset.pool,
+                    edits=edits,
+                    eval_results=subset.eval_results,
+                    config=invariant_config,
+                    split="opt",
+                    seed=args.seed + budget,
+                )
+                write_jsonl(artifact_dir / "stats" / f"{task.task_id}_{method_name}_invariant_edits.jsonl", budget_table)
+                write_jsonl(
+                    artifact_dir / "stats" / f"{task.task_id}_{method_name}_budget.jsonl",
+                    [
+                        {
+                            "method": method_name,
+                            "requested_budget": budget,
+                            "actual_source_calls": subset.source_calls,
+                            "num_prompts": len(subset.pool),
+                            "num_examples": len(subset.example_ids),
+                            "source_models": subset.source_model_ids,
+                        }
+                    ],
+                )
                 ipeo_prompt, ipeo_selection = select_zero_target_prompt(
                     task_id=task.task_id,
                     seed_prompt=pool[0],
                     edits=edits,
-                    invariant_table=invariant_table,
+                    invariant_table=budget_table,
                     fold_id=fold_id,
                     target_model=fold_target,
-                    source_models=source_models,
+                    source_models=subset.source_model_ids,
                     max_edits_per_prompt=invariant_config.max_edits_per_prompt,
-                    min_sign_agreement=invariant_config.min_sign_agreement,
-                    min_lcb=-0.05,
-                    exclude_generic=variant["exclude_generic"],
-                    exclude_edit_types=variant["exclude_edit_types"],
+                    min_sign_agreement=0.0,
+                    min_lcb=-0.10,
                     method_name=method_name,
                 )
                 ipeo_prompts.append(ipeo_prompt)
-                ipeo_composed_prompts[method_name] = ipeo_prompt
-                if method_name in fixed_methods:
-                    selections.append(ipeo_selection)
-            if fixed_methods & {"ipeo_select_existing", "ipeo_composed_vs_existing"}:
-                ipeo_existing_selection = select_existing_prompt_by_invariant_score(
+                selections.append(ipeo_selection)
+                budgeted_source_calls_by_method[method_name] = subset.source_calls
+                budgeted_dollars_by_method[method_name] = cost_ledger.method_estimated_cost(
+                    "fixed_pool",
+                    run_id=run_id,
+                    phase="baseline_optimization",
+                    model_ids=set(subset.source_model_ids),
                     task_id=task.task_id,
-                    pool=pool,
-                    invariant_table=invariant_table,
-                    fold_id=fold_id,
-                    target_model=fold_target,
-                    source_models=source_models,
+                    prompt_ids=set(subset.prompt_ids),
+                    example_ids=set(subset.example_ids),
                 )
-                if "ipeo_select_existing" in fixed_methods:
-                    selections.append(ipeo_existing_selection)
-            if "ipeo_composed_vs_existing" in fixed_methods and ipeo_existing_selection is not None:
-                ipeo_comparison_selection = select_composed_vs_existing_prompt(
-                    task_id=task.task_id,
-                    composed_prompt=ipeo_composed_prompts["ipeo_zero"],
-                    existing_selection=ipeo_existing_selection,
-                    pool=pool,
-                    invariant_table=invariant_table,
-                    fold_id=fold_id,
-                    target_model=fold_target,
-                    source_models=source_models,
-                )
-                selections.append(ipeo_comparison_selection)
 
         if "original" in fixed_methods:
             selections.append(original_prompt(task_id=task.task_id, fold_id=fold_id, target_model=fold_target, source_models=source_models, pool=pool))
@@ -493,6 +609,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 }
             }
         )
+        source_calls_by_method.update(budgeted_source_calls_by_method)
         dollars_by_method = {
             method: source_validation_cost
             for method in {
@@ -516,6 +633,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 }
             }
         )
+        dollars_by_method.update(budgeted_dollars_by_method)
         for model_id in source_models:
             source_calls_by_method[f"best_source_transfer:{model_id}"] = len(pool) * len(val_examples)
             dollars_by_method[f"best_source_transfer:{model_id}"] = (
@@ -540,7 +658,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             access_row(
                 task_id=task.task_id,
                 selection=selection,
-                source_train_calls=source_train_calls,
+                source_train_calls=source_calls_by_method.get(selection.method, source_train_calls),
                 source_validation_calls=source_validation_calls,
                 target_validation_calls=target_calls_by_method.get(selection.method, 0),
                 target_optimization_calls=target_calls_by_method.get(selection.method, selection.target_calls),

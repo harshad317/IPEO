@@ -45,6 +45,7 @@ def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     invariant_rows = read_jsonl(artifact_dir / "stats" / "gsm8k_invariant_edits.jsonl")
     assert invariant_rows
     assert any(row["method"] == "ipeo_zero" for row in rows)
+    assert any(row["method"] == "ipeo_budget_200" for row in rows)
     assert any(row["method"] == "ipeo_select_existing" for row in rows)
     assert any(row["method"] == "ipeo_composed_vs_existing" for row in rows)
     assert all(row["uses_target_test_for_selection"] is False for row in rows)
@@ -55,6 +56,8 @@ def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     assert ipeo_access["uses_target_validation"] is False
     target_bo_access = next(row for row in access_rows if row["method"] == "target_only_bo_fixed_pool")
     assert target_bo_access["validation_access"] == "target_validation"
+    budget_access = next(row for row in access_rows if row["method"] == "ipeo_budget_200")
+    assert budget_access["source_train_calls"] <= 200
     method_summary = (artifact_dir / "stats" / "method_summary.csv").read_text(encoding="utf-8")
     assert "optimization" in method_summary
     assert "test" in method_summary

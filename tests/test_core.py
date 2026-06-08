@@ -8,6 +8,7 @@ from ipeo.core.schemas import GenerationConfig, InvariantEditStats
 from ipeo.evaluation.cache import ResponseCache, make_cache_key
 from ipeo.evaluation.cost_ledger import CostLedger
 from ipeo.evaluation.evaluator import evaluate_pool
+from ipeo.methods.budgeted_ipeo import build_budgeted_source_subset, plan_budgeted_source_subset
 from ipeo.methods.ipeo_zero import prompt_invariant_score, select_existing_prompt_by_invariant_score
 from ipeo.models.mock import get_mock_model
 from ipeo.prompts.pool_builder import build_frozen_pool
@@ -162,6 +163,61 @@ def test_invariant_existing_prompt_selector_scores_edit_vectors(tmp_path: Path) 
     selected_prompt = next(prompt for prompt in pool if prompt.prompt_id == selection.prompt_id)
     assert selection.method == "ipeo_select_existing"
     assert prompt_invariant_score(selected_prompt, invariant_rows) == best_score
+
+
+def test_budgeted_source_subset_balances_prompts_and_examples(tmp_path: Path) -> None:
+    pool, _ = build_frozen_pool("gsm8k", num_prompts=30, artifact_dir=tmp_path)
+    task = get_task("gsm8k")
+    examples = task.load_split("opt", 48)
+    source_models = ["source_a", "source_b", "source_c"]
+    rows = [
+        _eval_row(prompt.prompt_id, example.example_id, model_id)
+        for model_id in source_models
+        for prompt in pool
+        for example in examples
+    ]
+
+    plan = plan_budgeted_source_subset(
+        pool=pool,
+        train_examples=examples,
+        source_model_ids=source_models,
+        budget=200,
+        seed=0,
+    )
+    subset = build_budgeted_source_subset(
+        pool=pool,
+        train_examples=examples,
+        source_model_ids=source_models,
+        pool_train_results=rows,
+        budget=200,
+        seed=0,
+    )
+
+    expected_calls = len(pool) * 2 * len(source_models)
+    assert plan.planned_source_calls == expected_calls
+    assert subset.source_calls == expected_calls
+    assert subset.source_calls <= 200
+    assert len(subset.pool) == len(pool)
+    assert len(subset.example_ids) == 2
+    assert {row.prompt_id for row in subset.eval_results} == {prompt.prompt_id for prompt in pool}
+    assert {row.model_id for row in subset.eval_results} == set(source_models)
+
+
+def _eval_row(prompt_id: str, example_id: str, model_id: str):
+    from ipeo.core.schemas import EvalResult
+
+    return EvalResult(
+        run_id="run",
+        task_id="gsm8k",
+        model_id=model_id,
+        prompt_id=prompt_id,
+        example_id=example_id,
+        split="opt",
+        raw_output_path="raw",
+        parsed_output={"raw": "1"},
+        score=1.0,
+        parse_success=True,
+    )
 
 
 def test_cost_ledger_aggregates(tmp_path: Path) -> None:

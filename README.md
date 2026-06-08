@@ -117,8 +117,18 @@ reported as skipped until a compatible `promptolution` runner is wired.
 Useful IPEO ablations:
 
 ```bash
---methods ipeo_zero ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
+--methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
 ```
+
+`ipeo_budget_200`, `ipeo_budget_500`, and `ipeo_budget_1000` estimate invariant
+edits from deterministic source-train subsets capped by the requested source
+call budget. They are zero-target transfer variants meant for direct
+cost-matched comparison against GEPA/MIPROv2. Actual calls can land slightly
+below the named budget because the sampler keeps complete
+prompt/example/source-model grids; for example, 30 prompts over 3 source
+environments gives 180 calls for `ipeo_budget_200`. When a live run requests
+only budgeted IPEO methods, `run_openai` evaluates only the union of those
+budget grids instead of the full source-train pool.
 
 `ipeo_select_existing` scores each frozen-pool prompt by the sum of invariant
 scores for its edit vector and selects the best existing prompt.
@@ -136,7 +146,7 @@ python -m ipeo.runners.run_openai \
   --model gpt-4.1-mini \
   --num_prompts 30 \
   --num_examples 48 \
-  --methods ipeo_zero ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
+  --methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
   --workers 8 \
   --timeout_seconds 300 \
   --max_retries 6 \

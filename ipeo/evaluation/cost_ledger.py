@@ -89,9 +89,18 @@ class CostLedger:
         model_ids: set[str] | None = None,
         task_id: str | None = None,
         prompt_ids: set[str] | None = None,
+        example_ids: set[str] | None = None,
     ) -> float:
         total = 0.0
-        for row in self._matching_rows(method, run_id=run_id, phase=phase, model_ids=model_ids, task_id=task_id, prompt_ids=prompt_ids):
+        for row in self._matching_rows(
+            method,
+            run_id=run_id,
+            phase=phase,
+            model_ids=model_ids,
+            task_id=task_id,
+            prompt_ids=prompt_ids,
+            example_ids=example_ids,
+        ):
             total += float(row.get("dollar_cost", 0.0))
         return total
 
@@ -103,11 +112,20 @@ class CostLedger:
         model_ids: set[str] | None = None,
         task_id: str | None = None,
         prompt_ids: set[str] | None = None,
+        example_ids: set[str] | None = None,
     ) -> float:
         """Return fair benchmark cost, billing cached rows as if uncached."""
 
         total = 0.0
-        for row in self._matching_rows(method, run_id=run_id, phase=phase, model_ids=model_ids, task_id=task_id, prompt_ids=prompt_ids):
+        for row in self._matching_rows(
+            method,
+            run_id=run_id,
+            phase=phase,
+            model_ids=model_ids,
+            task_id=task_id,
+            prompt_ids=prompt_ids,
+            example_ids=example_ids,
+        ):
             total += (
                 float(row.get("input_tokens", 0.0)) / 1000 * float(row.get("api_price_input", 0.0))
                 + float(row.get("output_tokens", 0.0)) / 1000 * float(row.get("api_price_output", 0.0))
@@ -121,6 +139,7 @@ class CostLedger:
         model_ids: set[str] | None = None,
         task_id: str | None = None,
         prompt_ids: set[str] | None = None,
+        example_ids: set[str] | None = None,
     ) -> int:
         total = 0
         for row in read_jsonl(self.path):
@@ -136,6 +155,8 @@ class CostLedger:
                 continue
             if prompt_ids is not None and row.get("prompt_id") not in prompt_ids:
                 continue
+            if example_ids is not None and row.get("example_id") not in example_ids:
+                continue
             total += 1
         return total
 
@@ -147,6 +168,7 @@ class CostLedger:
         model_ids: set[str] | None = None,
         task_id: str | None = None,
         prompt_ids: set[str] | None = None,
+        example_ids: set[str] | None = None,
     ) -> list[dict]:
         rows = []
         for row in read_jsonl(self.path):
@@ -161,6 +183,8 @@ class CostLedger:
             if task_id is not None and row.get("task_id") != task_id:
                 continue
             if prompt_ids is not None and row.get("prompt_id") not in prompt_ids:
+                continue
+            if example_ids is not None and row.get("example_id") not in example_ids:
                 continue
             rows.append(row)
         return rows

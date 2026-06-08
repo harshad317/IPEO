@@ -37,7 +37,14 @@ DEFAULT_BASELINES = [
     "target_only_bo_fixed_pool",
     "best_source_transfer",
 ]
-DEFAULT_IPEO_METHODS = ["ipeo_select_existing", "ipeo_composed_vs_existing", "ipeo_zero"]
+DEFAULT_IPEO_METHODS = [
+    "ipeo_budget_200",
+    "ipeo_budget_500",
+    "ipeo_budget_1000",
+    "ipeo_select_existing",
+    "ipeo_composed_vs_existing",
+    "ipeo_zero",
+]
 
 
 def analyze_artifact_dir(
