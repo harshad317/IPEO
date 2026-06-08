@@ -40,10 +40,9 @@ def evaluate_pool(
 
     def evaluate_one(model: ModelAdapter, prompt: PromptCandidate, example: Example) -> EvalResult:
         key = make_cache_key(model, prompt, example, generation_config)
-        cache_hit = cache.exists(key)
-        if cache_hit:
-            response = cache.load(key)
-        else:
+        response = cache.load_or_none(key)
+        cache_hit = response is not None
+        if response is None:
             response = model.generate(prompt.text, task.format_input(example), generation_config)
             cache.save(key, response)
         parsed = task.parse_output(response.raw_text)

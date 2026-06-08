@@ -4,8 +4,9 @@ from pathlib import Path
 
 from ipeo.core.ids import stable_hash
 from ipeo.core.schemas import GenerationConfig
-from ipeo.evaluation.cache import make_cache_key
+from ipeo.evaluation.cache import ResponseCache, make_cache_key
 from ipeo.evaluation.cost_ledger import CostLedger
+from ipeo.evaluation.evaluator import evaluate_pool
 from ipeo.models.mock import get_mock_model
 from ipeo.prompts.pool_builder import build_frozen_pool
 from ipeo.tasks.adapters import get_task
@@ -28,6 +29,34 @@ def test_cache_key_changes_with_prompt_and_generation_config(tmp_path: Path) -> 
     key_c = make_cache_key(model, pool[0], example, GenerationConfig(max_tokens=32))
     assert key_a != key_b
     assert key_a != key_c
+
+
+def test_corrupt_cache_entry_is_regenerated(tmp_path: Path) -> None:
+    pool, _ = build_frozen_pool("gsm8k", num_prompts=1, artifact_dir=tmp_path)
+    task = get_task("gsm8k")
+    example = task.load_split("val", 1)[0]
+    model = get_mock_model("mock_openai_a")
+    config = GenerationConfig(max_tokens=16)
+    cache = ResponseCache(tmp_path / "cache")
+    key = make_cache_key(model, pool[0], example, config)
+    cache._path(key).write_text("", encoding="utf-8")
+    ledger = CostLedger(tmp_path / "costs.jsonl")
+    rows = evaluate_pool(
+        run_id="run",
+        task=task,
+        models=[model],
+        pool=[pool[0], pool[0]],
+        examples=[example, example],
+        cache=cache,
+        cost_ledger=ledger,
+        generation_config=config,
+        method="unit",
+        fold_id="fold",
+        show_tqdm=False,
+        workers=4,
+    )
+    assert len(rows) == 4
+    assert cache.load_or_none(key) is not None
 
 
 def test_task_parsers_and_metrics() -> None:
