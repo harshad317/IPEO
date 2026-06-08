@@ -11,3 +11,6 @@ tasks:
   extraction_qa:
     metric: token_f1
     max_tokens: 16
+  ifbench:
+    metric: constraint_accuracy
+    max_tokens: 96

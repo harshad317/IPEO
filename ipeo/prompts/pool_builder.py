@@ -41,6 +41,11 @@ TASK_EDIT_SPECS = {
         ("evidence_use", "Use only words supported by the provided context.", "rubric", 9, False, False),
         ("extraction_boundary", "Return the minimal answer span, not a full sentence.", "output_schema", 9, False, False),
     ],
+    "ifbench": [
+        ("output_format", "Satisfy all visible formatting constraints exactly.", "output_schema", 8, False, False),
+        ("verification", "Check counts, casing, required tokens, and JSON keys before finalizing.", "rubric", 11, False, False),
+        ("verbosity_control", "Do not add explanations, apologies, markdown fences, or extra text.", "output_schema", 10, False, False),
+    ],
 }
 
 

@@ -37,6 +37,9 @@ def test_task_parsers_and_metrics() -> None:
     assert cls.score(cls.parse_output("sports"), "sports") == 1.0
     qa = get_task("extraction_qa")
     assert qa.score(qa.parse_output("Answer: Paris"), "Paris") == 1.0
+    ifbench = get_task("ifbench")
+    ex = ifbench.load_split("val", 1)[0]
+    assert ifbench.score(ifbench.parse_output("coral reefs protect coral life."), ex.gold) == 1.0
 
 
 def test_cost_ledger_aggregates(tmp_path: Path) -> None:

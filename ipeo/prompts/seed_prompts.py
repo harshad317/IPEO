@@ -26,5 +26,9 @@ def seed_prompt_texts(task_id: str) -> list[str]:
             "Answer the question using only the provided context. Respond with the shortest supported span. OUTPUT_ONLY",
             "Find the exact evidence span in the context and output only that answer.",
         ],
+        "ifbench": [
+            "Follow every explicit constraint exactly. Output only the requested response, with no explanation.",
+            "Before answering, check formatting, counts, required words, and ending tokens internally. Then provide only the final compliant answer.",
+        ],
     }
     return common + task_specific[task_id]

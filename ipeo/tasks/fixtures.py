@@ -96,3 +96,59 @@ def extraction_qa_examples(total: int = 180) -> list[Example]:
             )
         )
     return rows
+
+
+def ifbench_examples(total: int = 180) -> list[Example]:
+    """Small verifiable instruction-following fixture inspired by IFBench.
+
+    The official IFBench dataset ships many more constraints and verifier
+    functions. This local fixture keeps the same spirit for MVP benchmarking:
+    every example is scored by a deterministic verifier, not an LLM judge.
+    """
+
+    constraints = [
+        {
+            "kind": "word_count",
+            "input": "Write a response about careful science. Constraint: use exactly 3 words.",
+            "gold": {"kind": "word_count", "n": 3},
+        },
+        {
+            "kind": "keyword_exact",
+            "input": "Write one sentence about coral reefs. Constraint: include the word coral exactly 2 times.",
+            "gold": {"kind": "keyword_exact", "keyword": "coral", "n": 2},
+        },
+        {
+            "kind": "line_count",
+            "input": "List colors. Constraint: output exactly 3 non-empty lines.",
+            "gold": {"kind": "line_count", "n": 3},
+        },
+        {
+            "kind": "uppercase",
+            "input": "Write a short motto about focus. Constraint: all alphabetic letters must be uppercase.",
+            "gold": {"kind": "uppercase"},
+        },
+        {
+            "kind": "suffix",
+            "input": "Write a short answer about planning. Constraint: end the response with the exact token <END>.",
+            "gold": {"kind": "suffix", "suffix": "<END>"},
+        },
+        {
+            "kind": "json_keys",
+            "input": "Answer with a JSON object. Constraint: use exactly the keys answer and confidence.",
+            "gold": {"kind": "json_keys", "keys": ["answer", "confidence"]},
+        },
+    ]
+    rows: list[Example] = []
+    for i in range(total):
+        item = constraints[i % len(constraints)]
+        rows.append(
+            Example(
+                example_id=f"ifbench-{i:04d}",
+                task_id="ifbench",
+                split=_split_for_index(i),
+                input=item["input"],
+                gold=item["gold"],
+                meta={"constraint_kind": item["kind"]},
+            )
+        )
+    return rows

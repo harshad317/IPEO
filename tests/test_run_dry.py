@@ -39,3 +39,23 @@ def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     invariant_rows = read_jsonl(artifact_dir / "stats" / "gsm8k_invariant_edits.jsonl")
     assert invariant_rows
     assert any(row["method"] == "ipeo_zero" for row in rows)
+
+
+def test_ifbench_dry_run(tmp_path: Path) -> None:
+    args = argparse.Namespace(
+        tasks=["ifbench"],
+        models=["mock_openai_a", "mock_openai_b", "mock_openai_c", "mock_openai_d"],
+        num_prompts=6,
+        num_examples=3,
+        fold_target="mock_openai_d",
+        cache_dir=str(tmp_path / "cache"),
+        cost_log=str(tmp_path / "artifacts" / "costs" / "dry_run.jsonl"),
+        artifact_dir=str(tmp_path / "artifacts"),
+        progress="off",
+        quiet=True,
+        no_color=True,
+        seed=0,
+    )
+    rows = run(args)
+    assert rows
+    assert any(row["task_id"] == "ifbench" for row in rows)

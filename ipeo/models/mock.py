@@ -64,6 +64,7 @@ TASK_BASE = {
     "bbh": 0.50,
     "classification": 0.58,
     "extraction_qa": 0.54,
+    "ifbench": 0.46,
 }
 
 
@@ -88,6 +89,11 @@ TASK_EDIT_HINTS = {
         "extraction_boundary": 0.10,
         "output_format": 0.04,
     },
+    "ifbench": {
+        "output_format": 0.10,
+        "verification": 0.12,
+        "verbosity_control": 0.08,
+    },
 }
 
 
@@ -97,6 +103,8 @@ def _hash_unit(*parts: str) -> float:
 
 
 def _infer_task(input_text: str) -> str:
+    if "Constraint:" in input_text:
+        return "ifbench"
     if "stickers" in input_text:
         return "gsm8k"
     if "what day" in input_text.lower():
@@ -124,6 +132,20 @@ def _gold_from_input(task_id: str, input_text: str) -> str:
         if "researchers" in lowered or "experiment" in lowered:
             return "science"
         return "world"
+    if task_id == "ifbench":
+        if "exactly 3 words" in input_text:
+            return "Careful science wins"
+        if "coral exactly 2 times" in input_text:
+            return "coral reefs protect coral life."
+        if "exactly 3 non-empty lines" in input_text:
+            return "red\nblue\ngreen"
+        if "all alphabetic letters must be uppercase" in input_text:
+            return "FOCUS BUILDS MOMENTUM"
+        if "exact token <END>" in input_text:
+            return "Plans become action <END>"
+        if "keys answer and confidence" in input_text:
+            return '{"answer":"yes","confidence":1}'
+        return "compliant"
     match = re.search(r"in ([A-Z][a-z]+) during", input_text)
     return match.group(1) if match else "unknown"
 
@@ -137,6 +159,8 @@ def _wrong_answer(task_id: str, gold: str) -> str:
     if task_id == "classification":
         labels = ["sports", "business", "science", "world"]
         return labels[(labels.index(gold) + 1) % len(labels)]
+    if task_id == "ifbench":
+        return "This response ignores the constraint."
     return "unknown"
 
 
