@@ -34,6 +34,7 @@ from ipeo.models.openai_adapter import build_openai_environments, clamp_openai_m
 from ipeo.prompts.pool_builder import build_frozen_pool
 from ipeo.runners.progress import ProgressSettings, RichRunReporter
 from ipeo.stats.ipeo_compare import build_composed_vs_existing_row
+from ipeo.stats.method_summary import aggregate_method_summary_rows, build_method_summary_rows
 from ipeo.stats.regret import build_transfer_rows
 from ipeo.tasks.adapters import get_tasks
 
@@ -168,6 +169,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     invariant_config = InvariantScorerConfig(n_bootstrap=20)
     all_transfer_rows: list[dict[str, object]] = []
     all_comparison_rows: list[dict[str, object]] = []
+    all_method_summary_rows: list[dict[str, object]] = []
 
     write_jsonl(artifact_dir / "stats" / "optional_baselines.jsonl", optional_baseline_statuses())
     official_records = [record for record in official_optimizer_records() if record.name in official_methods]
@@ -419,6 +421,18 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             dollars_by_method=dollars_by_method,
         )
         all_transfer_rows.extend(rows)
+        method_summary_rows = build_method_summary_rows(
+            run_id=run_id,
+            task_id=task.task_id,
+            target_model=fold_target,
+            source_models=source_models,
+            selections=selections,
+            transfer_rows=rows,
+            pool_results=pool_results,
+            final_results=final_results,
+            cost_log_path=args.cost_log,
+        )
+        all_method_summary_rows.extend(method_summary_rows)
         task_comparison_rows: list[dict[str, object]] = []
         if invariant_table and ipeo_existing_selection is not None and "ipeo_zero" in ipeo_composed_prompts:
             existing_prompt = next(prompt for prompt in pool if prompt.prompt_id == ipeo_existing_selection.prompt_id)
@@ -442,6 +456,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
 
     write_csv(artifact_dir / "stats" / "transfer_regret.csv", all_transfer_rows)
     write_csv(artifact_dir / "stats" / "ipeo_composed_vs_existing.csv", all_comparison_rows)
+    write_csv(artifact_dir / "stats" / "method_summary.csv", all_method_summary_rows)
+    reporter.method_summary_panels(aggregate_method_summary_rows(all_method_summary_rows))
     invariant_rows = []
     for path in sorted((artifact_dir / "stats").glob("*_invariant_edits.jsonl")):
         from ipeo.core.io import read_jsonl

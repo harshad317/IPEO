@@ -37,12 +37,16 @@ def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     assert (artifact_dir / "eval_results" / "gsm8k_pool_val.jsonl").exists()
     assert (artifact_dir / "stats" / "transfer_regret.csv").exists()
     assert (artifact_dir / "stats" / "ipeo_composed_vs_existing.csv").exists()
+    assert (artifact_dir / "stats" / "method_summary.csv").exists()
     assert (artifact_dir / "stats" / "gsm8k_ipeo_composed_vs_existing.jsonl").exists()
     invariant_rows = read_jsonl(artifact_dir / "stats" / "gsm8k_invariant_edits.jsonl")
     assert invariant_rows
     assert any(row["method"] == "ipeo_zero" for row in rows)
     assert any(row["method"] == "ipeo_select_existing" for row in rows)
     assert any(row["method"] == "ipeo_composed_vs_existing" for row in rows)
+    method_summary = (artifact_dir / "stats" / "method_summary.csv").read_text(encoding="utf-8")
+    assert "optimization" in method_summary
+    assert "test" in method_summary
 
 
 def test_ifbench_dry_run(tmp_path: Path) -> None:

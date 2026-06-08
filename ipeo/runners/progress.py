@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 
@@ -48,3 +50,36 @@ class RichRunReporter:
                 f"{float(row.get('total_dollars', 0.0)):.6f}",
             )
         self.console.print(table)
+
+    def method_summary_panels(self, rows: list[dict[str, Any]]) -> None:
+        if self.settings.quiet or self.settings.mode == "off" or not rows:
+            return
+        split_order = {"train": 0, "val": 1, "test": 2, "optimization": 3}
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["method"]), []).append(row)
+        for method in sorted(grouped):
+            table = Table(show_header=True)
+            table.add_column("Split")
+            table.add_column("Score", justify="right")
+            table.add_column("StdDev", justify="right")
+            table.add_column("AvgTok", justify="right")
+            table.add_column("API calls", justify="right")
+            for row in sorted(grouped[method], key=lambda item: split_order.get(str(item["split"]), 99)):
+                table.add_row(
+                    str(row["split"]),
+                    self._format_float(row.get("score")),
+                    self._format_float(row.get("stddev")),
+                    self._format_float(row.get("avg_tokens"), digits=1),
+                    str(int(row.get("api_calls", 0) or 0)),
+                )
+            self.console.print(Panel(table, title=method, expand=False))
+
+    @staticmethod
+    def _format_float(value: object, digits: int = 3) -> str:
+        if value is None:
+            return "—"
+        try:
+            return f"{float(value):.{digits}f}"
+        except (TypeError, ValueError):
+            return "—"
