@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -48,7 +49,14 @@ class OpenAIResponsesAdapter:
     max_retries: int = 3
 
     @classmethod
-    def from_model(cls, api_model: str, env_id: str) -> "OpenAIResponsesAdapter":
+    def from_model(
+        cls,
+        api_model: str,
+        env_id: str,
+        *,
+        timeout_seconds: int = 120,
+        max_retries: int = 3,
+    ) -> "OpenAIResponsesAdapter":
         price_in, price_out = _pricing_for_model(api_model)
         return cls(
             model_id=env_id,
@@ -56,6 +64,8 @@ class OpenAIResponsesAdapter:
             version=api_model,
             price_input_per_1k=price_in,
             price_output_per_1k=price_out,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
         )
 
     def generate(self, prompt: str, input: str, config: GenerationConfig) -> ModelResponse:
@@ -75,19 +85,19 @@ class OpenAIResponsesAdapter:
         if config.top_p != 1.0:
             payload["top_p"] = config.top_p
         body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            f"{base_url}/responses",
-            data=body,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         start = time.perf_counter()
         last_error: Exception | None = None
         for attempt in range(self.max_retries):
             try:
+                request = urllib.request.Request(
+                    f"{base_url}/responses",
+                    data=body,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
                 with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                     data = json.loads(response.read().decode("utf-8"))
                 latency_ms = int((time.perf_counter() - start) * 1000)
@@ -112,15 +122,31 @@ class OpenAIResponsesAdapter:
                     raise RuntimeError(f"OpenAI API request failed with HTTP {exc.code}: {detail}") from exc
             except urllib.error.URLError as exc:
                 last_error = exc
+            except (TimeoutError, socket.timeout) as exc:
+                last_error = exc
             if attempt < self.max_retries - 1:
                 time.sleep(2**attempt)
         raise RuntimeError(f"OpenAI API request failed after {self.max_retries} attempts: {last_error}")
 
 
-def build_openai_environments(api_model: str, count: int = 4) -> list[OpenAIResponsesAdapter]:
+def build_openai_environments(
+    api_model: str,
+    count: int = 4,
+    *,
+    timeout_seconds: int = 120,
+    max_retries: int = 3,
+) -> list[OpenAIResponsesAdapter]:
     if count < 1:
         raise ValueError("count must be at least 1")
     suffixes = ["source_a", "source_b", "source_c", "target"]
     while len(suffixes) < count:
         suffixes.append(f"env_{len(suffixes) + 1}")
-    return [OpenAIResponsesAdapter.from_model(api_model, f"{api_model}:{suffixes[idx]}") for idx in range(count)]
+    return [
+        OpenAIResponsesAdapter.from_model(
+            api_model,
+            f"{api_model}:{suffixes[idx]}",
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )
+        for idx in range(count)
+    ]

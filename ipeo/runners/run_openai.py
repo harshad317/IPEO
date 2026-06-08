@@ -69,6 +69,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max_tokens", type=int, default=64)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--timeout_seconds", type=int, default=240)
+    parser.add_argument("--max_retries", type=int, default=5)
     return parser.parse_args()
 
 
@@ -129,7 +131,12 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     artifact_dir = Path(args.artifact_dir)
     settings = ProgressSettings(mode=args.progress, quiet=args.quiet, no_color=args.no_color)
     reporter = RichRunReporter(settings)
-    models = build_openai_environments(args.model, count=4)
+    models = build_openai_environments(
+        args.model,
+        count=4,
+        timeout_seconds=args.timeout_seconds,
+        max_retries=args.max_retries,
+    )
     model_ids = [model.model_id for model in models]
     fold_target = model_ids[-1]
     source_models = model_ids[:-1]

@@ -20,10 +20,12 @@ def test_normalize_methods_all_expands() -> None:
 
 
 def test_openai_environments_use_single_api_model() -> None:
-    envs = build_openai_environments("gpt-4.1-mini", count=4)
+    envs = build_openai_environments("gpt-4.1-mini", count=4, timeout_seconds=300, max_retries=7)
     assert len(envs) == 4
     assert {env.api_model for env in envs} == {"gpt-4.1-mini"}
     assert len({env.model_id for env in envs}) == 4
+    assert {env.timeout_seconds for env in envs} == {300}
+    assert {env.max_retries for env in envs} == {7}
 
 
 def test_openai_adapter_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
