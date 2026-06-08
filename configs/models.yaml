@@ -1,0 +1,13 @@
+models:
+  mock_openai:
+    provider: openai_family
+    version_pinned: true
+  mock_anthropic:
+    provider: anthropic_family
+    version_pinned: true
+  mock_google:
+    provider: google_family
+    version_pinned: true
+  mock_llama:
+    provider: open_or_local_family
+    version_pinned: true

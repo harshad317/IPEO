@@ -1,0 +1,15 @@
+baselines:
+  p0:
+    - original
+    - source_average
+    - pooled_source
+    - best_source_transfer
+    - worst_source_robust
+    - random_search
+    - target_only_bo_fixed_pool
+    - asha_fixed_pool
+    - promptbridge_emulation
+  optional_official:
+    - gepa
+    - miprov2
+    - capo

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ipeo"
+version = "0.1.0"
+description = "Invariant Prompt-Edit Optimization runnable MVP"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.0",
+  "rich>=13.0",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+benchmarks = [
+  "datasets>=2.18",
+  "scikit-learn>=1.4",
+  "scipy>=1.11",
+  "PyYAML>=6.0",
+]
+baselines = [
+  "dspy>=2.6",
+  "promptolution>=2.0",
+  "optuna>=3.6",
+]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["ipeo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

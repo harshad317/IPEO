@@ -1,0 +1,15 @@
+tasks:
+  - gsm8k
+  - bbh
+  - classification
+  - extraction_qa
+models:
+  - mock_openai
+  - mock_anthropic
+  - mock_google
+  - mock_llama
+fold_target: mock_llama
+num_prompts: 20
+num_examples: 24
+temperature: 0.0
+progress: both
