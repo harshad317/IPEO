@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Lock
 
 from ipeo.core.io import read_jsonl, write_jsonl
 from ipeo.core.schemas import CostLog, GenerationConfig, ModelResponse, PromptCandidate
@@ -13,6 +14,7 @@ class CostLedger:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.rows: list[CostLog] = []
+        self._lock = Lock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             self.path.write_text("", encoding="utf-8")
@@ -65,8 +67,9 @@ class CostLedger:
             max_tokens=config.max_tokens,
             cache_hit=cache_hit,
         )
-        self.rows.append(row)
-        write_jsonl(self.path, [row], append=True)
+        with self._lock:
+            self.rows.append(row)
+            write_jsonl(self.path, [row], append=True)
         return row
 
     def aggregate(self) -> dict[str, float]:

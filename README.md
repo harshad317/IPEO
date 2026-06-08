@@ -29,3 +29,24 @@ python -m ipeo.runners.run_dry \
 ```
 
 Artifacts are written under `artifacts/` as JSONL and CSV files.
+
+## Live OpenAI Benchmark
+
+Set `OPENAI_API_KEY` first, then run:
+
+```bash
+python -m ipeo.runners.run_openai \
+  --tasks gsm8k bbh classification extraction_qa \
+  --model gpt-4.1-mini \
+  --num_prompts 20 \
+  --num_examples 24 \
+  --methods all \
+  --workers 8 \
+  --progress both \
+  --artifact_dir artifacts/gpt41mini_benchmark \
+  --cache_dir artifacts/gpt41mini_benchmark/cache \
+  --cost_log artifacts/gpt41mini_benchmark/costs/run.jsonl
+```
+
+`--methods all` runs the implemented fixed-pool methods and records requested
+official optimizer status for GEPA, MIPROv2, and CAPO.

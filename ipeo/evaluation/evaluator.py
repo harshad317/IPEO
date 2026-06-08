@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable
 
@@ -31,15 +32,13 @@ def evaluate_pool(
     phase: str = "evaluation",
     artifact_path: str | Path | None = None,
     show_tqdm: bool = True,
+    workers: int = 1,
 ) -> list[EvalResult]:
     rows: list[EvalResult] = []
     total = len(models) * len(pool) * len(examples)
-    iterator: Iterable[tuple[ModelAdapter, PromptCandidate, Example]] = (
-        (model, prompt, example) for model in models for prompt in pool for example in examples
-    )
-    progress = tqdm(iterator, total=total, disable=not show_tqdm, leave=False, desc=f"{task.task_id}:{method}")
     running_score = 0.0
-    for idx, (model, prompt, example) in enumerate(progress, start=1):
+
+    def evaluate_one(model: ModelAdapter, prompt: PromptCandidate, example: Example) -> EvalResult:
         key = make_cache_key(model, prompt, example, generation_config)
         cache_hit = cache.exists(key)
         if cache_hit:
@@ -84,10 +83,41 @@ def evaluate_pool(
             parse_success=parse_success,
             error_type=error_type,
         )
-        rows.append(row)
-        running_score += score
-        if show_tqdm:
-            progress.set_postfix(acc=f"{running_score / idx:.3f}", calls=idx)
+        return row
+
+    iterator: list[tuple[ModelAdapter, PromptCandidate, Example]] = [
+        (model, prompt, example) for model in models for prompt in pool for example in examples
+    ]
+    if workers <= 1:
+        progress: Iterable[tuple[ModelAdapter, PromptCandidate, Example]] = tqdm(
+            iterator,
+            total=total,
+            disable=not show_tqdm,
+            leave=False,
+            desc=f"{task.task_id}:{method}",
+        )
+        for idx, (model, prompt, example) in enumerate(progress, start=1):
+            row = evaluate_one(model, prompt, example)
+            rows.append(row)
+            running_score += row.score
+            if show_tqdm:
+                progress.set_postfix(acc=f"{running_score / idx:.3f}", calls=idx)  # type: ignore[attr-defined]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(evaluate_one, model, prompt, example) for model, prompt, example in iterator]
+            progress = tqdm(
+                as_completed(futures),
+                total=total,
+                disable=not show_tqdm,
+                leave=False,
+                desc=f"{task.task_id}:{method}",
+            )
+            for idx, future in enumerate(progress, start=1):
+                row = future.result()
+                rows.append(row)
+                running_score += row.score
+                if show_tqdm:
+                    progress.set_postfix(acc=f"{running_score / idx:.3f}", calls=idx)
     if artifact_path is not None:
         write_jsonl(artifact_path, rows)
     return rows
