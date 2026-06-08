@@ -30,9 +30,16 @@ def _record_from_status(status: OptionalBaselineStatus) -> OfficialOptimizerReco
             package=status.package,
             reason=status.reason or "optional package unavailable",
         )
+    if status.name in {"gepa", "miprov2"}:
+        return OfficialOptimizerRecord(
+            name=status.name,
+            status="ready",
+            package=status.package,
+            reason="runner can execute this optimizer through DSPy when OPENAI_API_KEY is set",
+        )
     return OfficialOptimizerRecord(
         name=status.name,
         status="not_implemented",
         package=status.package,
-        reason="package is installed, but this runner does not yet execute the official optimizer",
+        reason="package is installed, but this runner does not yet execute CAPO",
     )

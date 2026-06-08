@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from ipeo.baselines.dspy_optimizers import DspyOptimizerConfig, DspyOptimizerResult, run_dspy_optimizer
 from ipeo.baselines.official_optimizers import official_optimizer_records
 from ipeo.baselines.optional_wrappers import optional_baseline_statuses
 from ipeo.core.ids import stable_hash
@@ -89,6 +90,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout_seconds", type=int, default=240)
     parser.add_argument("--max_retries", type=int, default=5)
+    parser.add_argument("--dspy_auto", choices=["light", "medium", "heavy"], default="light")
+    parser.add_argument("--dspy_train_examples", type=int, default=16)
+    parser.add_argument("--dspy_val_examples", type=int, default=16)
+    parser.add_argument("--dspy_max_metric_calls", type=int, default=None)
+    parser.add_argument("--dspy_max_bootstrapped_demos", type=int, default=0)
+    parser.add_argument("--dspy_max_labeled_demos", type=int, default=0)
     return parser.parse_args()
 
 
@@ -182,6 +189,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         )
         reporter.status(f"Task {task.task_id}: building frozen pool")
         pool, edits = build_frozen_pool(task.task_id, num_prompts=args.num_prompts, seed=args.seed, artifact_dir=artifact_dir)
+        opt_examples = task.load_split("opt", args.num_examples)
         val_examples = task.load_split("val", args.num_examples)
         test_examples = task.load_split("test", args.num_examples)
 
@@ -315,10 +323,62 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         if "best_source_transfer" in fixed_methods:
             selections.extend(best_source_transfer(task_id=task.task_id, fold_id=fold_id, target_model=fold_target, source_models=source_models, pool=pool, eval_results=pool_results))
 
+        official_results: list[DspyOptimizerResult] = []
+        if official_methods:
+            dspy_config = DspyOptimizerConfig(
+                api_model=args.model,
+                fold_id=fold_id,
+                target_model=fold_target,
+                source_models=source_models,
+                seed=args.seed,
+                auto=args.dspy_auto,
+                train_examples=args.dspy_train_examples,
+                val_examples=args.dspy_val_examples,
+                max_bootstrapped_demos=args.dspy_max_bootstrapped_demos,
+                max_labeled_demos=args.dspy_max_labeled_demos,
+                max_metric_calls=args.dspy_max_metric_calls,
+                num_threads=args.workers,
+                temperature=args.temperature,
+                max_tokens=generation_config.max_tokens,
+                max_retries=args.max_retries,
+            )
+            for method_name in sorted(official_methods):
+                if method_name == "capo":
+                    official_results.append(
+                        DspyOptimizerResult(
+                            method="capo",
+                            status="skipped",
+                            reason="CAPO requires the optional promptolution package and a compatible runner API",
+                        )
+                    )
+                    continue
+                reporter.status(f"Task {task.task_id}: running official {method_name} optimizer through DSPy")
+                result = run_dspy_optimizer(
+                    method=method_name,
+                    run_id=run_id,
+                    task=task,
+                    train_examples=opt_examples,
+                    val_examples=val_examples,
+                    test_examples=test_examples,
+                    artifact_dir=artifact_dir,
+                    config=dspy_config,
+                )
+                official_results.append(result)
+                if result.selection is not None:
+                    selections.append(result.selection)
+            write_jsonl(artifact_dir / "stats" / f"{task.task_id}_official_optimizer_results.jsonl", official_results)
+
         write_jsonl(artifact_dir / "stats" / f"{task.task_id}_method_selections.jsonl", selections)
+        if not selections:
+            reporter.status(f"Task {task.task_id}: no runnable methods completed; skipping transfer table")
+            continue
+        official_method_names = {result.method for result in official_results if result.selection is not None}
+        official_eval_results = [row for result in official_results for row in result.eval_results]
         comparison_prompts = list(ipeo_composed_prompts.values()) if "ipeo_composed_vs_existing" in fixed_methods else []
         prompt_pool = pool + ipeo_prompts + comparison_prompts
-        final_prompts = _dedupe_prompts([_selection_to_prompt(selection, prompt_pool) for selection in selections])
+        final_prompts = _dedupe_prompts(
+            [_selection_to_prompt(selection, prompt_pool) for selection in selections if selection.method not in official_method_names]
+        )
         final_prompts = _dedupe_prompts(final_prompts + comparison_prompts)
         reporter.status(f"Task {task.task_id}: evaluating selected methods on target {args.model} environment")
         final_results = evaluate_pool(
@@ -338,6 +398,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             show_tqdm=settings.use_tqdm,
             workers=args.workers,
         )
+        combined_final_results = final_results + official_eval_results
         source_average_prompt_id = next((selection.prompt_id for selection in selections if selection.method == "source_average"), selections[0].prompt_id)
         source_eval_calls = len(source_models) * len(pool) * len(val_examples)
         source_eval_cost = cost_ledger.method_cost(
@@ -403,7 +464,13 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     task_id=task.task_id,
                 )
             )
+        target_calls_by_method = {"target_only_bo_fixed_pool": min(8, len(pool)) * len(val_examples)}
         dollars_by_method.update({"target_only_bo_fixed_pool": target_pool_val_cost})
+        for result in official_results:
+            if result.selection is None:
+                continue
+            target_calls_by_method[result.method] = result.optimization_calls
+            dollars_by_method[result.method] = result.total_dollars
         for selection in selections:
             dollars_by_method[selection.method] = dollars_by_method.get(selection.method, 0.0) + final_cost_by_prompt.get(selection.prompt_id, 0.0)
         rows = build_transfer_rows(
@@ -412,12 +479,12 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             target_model=fold_target,
             source_models=source_models,
             selections=selections,
-            final_results=final_results + pool_test_results,
+            final_results=combined_final_results + pool_test_results,
             pool_results=pool_test_results,
             pool=pool,
             source_average_prompt_id=source_average_prompt_id,
             source_calls_by_method=source_calls_by_method,
-            target_calls_by_method={"target_only_bo_fixed_pool": min(8, len(pool)) * len(val_examples)},
+            target_calls_by_method=target_calls_by_method,
             dollars_by_method=dollars_by_method,
         )
         all_transfer_rows.extend(rows)
@@ -429,7 +496,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             selections=selections,
             transfer_rows=rows,
             pool_results=pool_results,
-            final_results=final_results,
+            final_results=combined_final_results,
             cost_log_path=args.cost_log,
         )
         all_method_summary_rows.extend(method_summary_rows)
@@ -447,7 +514,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     existing_prompt=existing_prompt,
                     comparison_selection=ipeo_comparison_selection,
                     invariant_table=invariant_table,
-                    eval_results=final_results + pool_test_results,
+                    eval_results=combined_final_results + pool_test_results,
                 )
             )
             write_jsonl(artifact_dir / "stats" / f"{task.task_id}_ipeo_composed_vs_existing.jsonl", task_comparison_rows)

@@ -88,11 +88,23 @@ def build_method_summary_rows(
             for row in pool_results
             if row.prompt_id == prompt_id and row.model_id in source_model_set and row.split == "val"
         ]
+        if not train_results:
+            train_results = [
+                row
+                for row in final_results
+                if row.prompt_id == prompt_id and row.model_id == target_model and row.split == "opt"
+            ]
         val_results = [
             row
             for row in pool_results
             if row.prompt_id == prompt_id and row.model_id == target_model and row.split == "val"
         ]
+        if not val_results:
+            val_results = [
+                row
+                for row in final_results
+                if row.prompt_id == prompt_id and row.model_id == target_model and row.split == "val"
+            ]
         test_results = [
             row
             for row in final_results
@@ -141,6 +153,9 @@ def build_method_summary_rows(
         ]
         for split, split_results, split_cost_rows in split_specs:
             score, stddev = _score_stats(split_results)
+            api_calls = _api_calls(split_cost_rows)
+            if not split_cost_rows and split_results:
+                api_calls = len(split_results)
             rows.append(
                 {
                     "task_id": task_id,
@@ -149,7 +164,7 @@ def build_method_summary_rows(
                     "score": score,
                     "stddev": stddev,
                     "avg_tokens": _avg_tokens(split_cost_rows),
-                    "api_calls": _api_calls(split_cost_rows),
+                    "api_calls": api_calls,
                 }
             )
 

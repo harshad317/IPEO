@@ -49,7 +49,9 @@ python -m ipeo.runners.run_openai \
 ```
 
 `--methods all` runs the implemented fixed-pool methods, IPEO ablations, and
-records requested official optimizer status for GEPA, MIPROv2, and CAPO.
+the optional official optimizer wrappers. GEPA and MIPROv2 execute through
+DSPy when `dspy`, `optuna`, and `OPENAI_API_KEY` are available. CAPO is still
+reported as skipped until a compatible `promptolution` runner is wired.
 
 Useful IPEO ablations:
 
@@ -65,9 +67,30 @@ existing-prompt selector without target leakage, then writes
 `stats/ipeo_composed_vs_existing.csv` to report which side actually won on the
 held-out target test split.
 
-Official optimizer records are status-only until the runner invokes the actual
-external optimizer package. Installed-but-not-run optimizers are marked
-`not_implemented`; missing packages are marked `skipped`.
+To run only IPEO plus GEPA/MIPROv2:
+
+```bash
+python -m ipeo.runners.run_openai \
+  --tasks gsm8k bbh classification extraction_qa ifbench_hard \
+  --model gpt-4.1-mini \
+  --num_prompts 30 \
+  --num_examples 48 \
+  --methods ipeo_zero ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
+  --workers 8 \
+  --timeout_seconds 300 \
+  --max_retries 6 \
+  --dspy_auto light \
+  --dspy_train_examples 16 \
+  --dspy_val_examples 16 \
+  --progress both \
+  --artifact_dir artifacts/gpt41mini_dspy_methods \
+  --cache_dir artifacts/gpt41mini_dspy_methods/cache \
+  --cost_log artifacts/gpt41mini_dspy_methods/costs/run.jsonl
+```
+
+Use `--dspy_auto medium` or `--dspy_auto heavy` only when you are ready to
+spend more optimizer calls. `--dspy_max_metric_calls N` caps GEPA with an
+explicit metric-call budget.
 
 ## IFBench Stress Tests
 
