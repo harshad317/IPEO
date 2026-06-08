@@ -184,9 +184,46 @@ def test_cost_ledger_aggregates(tmp_path: Path) -> None:
         config=GenerationConfig(),
         cache_hit=False,
     )
+    ledger.log(
+        run_id="run",
+        task_id="gsm8k",
+        model=model,
+        method="unit",
+        fold_id="fold",
+        seed=0,
+        phase="evaluation",
+        prompt=pool[0],
+        edit_id=None,
+        example_id="ex-cache",
+        response=response,
+        config=GenerationConfig(),
+        cache_hit=True,
+    )
+    ledger.log(
+        run_id="other-run",
+        task_id="gsm8k",
+        model=model,
+        method="unit",
+        fold_id="fold",
+        seed=0,
+        phase="evaluation",
+        prompt=pool[0],
+        edit_id=None,
+        example_id="ex-other",
+        response=response,
+        config=GenerationConfig(),
+        cache_hit=False,
+    )
     agg = ledger.aggregate()
-    assert agg["calls"] == 1.0
+    assert agg["calls"] == 2.0
     assert agg["dollars"] > 0
-    assert ledger.method_cost("unit", task_id="gsm8k", prompt_ids={pool[0].prompt_id}) > 0
+    paid_cost = ledger.method_cost("unit", task_id="gsm8k", prompt_ids={pool[0].prompt_id})
+    estimated_cost = ledger.method_estimated_cost("unit", task_id="gsm8k", prompt_ids={pool[0].prompt_id})
+    assert paid_cost > 0
+    assert estimated_cost > paid_cost
+    run_estimated_cost = ledger.method_estimated_cost("unit", run_id="run", task_id="gsm8k", prompt_ids={pool[0].prompt_id})
+    other_estimated_cost = ledger.method_estimated_cost("unit", run_id="other-run", task_id="gsm8k", prompt_ids={pool[0].prompt_id})
+    assert run_estimated_cost > other_estimated_cost
     assert ledger.method_cost("unit", task_id="ifbench") == 0
-    assert ledger.method_calls("unit", task_id="gsm8k", prompt_ids={pool[0].prompt_id}) == 1
+    assert ledger.method_calls("unit", task_id="gsm8k", prompt_ids={pool[0].prompt_id}) == 2
+    assert ledger.method_calls("unit", run_id="run", task_id="gsm8k", prompt_ids={pool[0].prompt_id}) == 1

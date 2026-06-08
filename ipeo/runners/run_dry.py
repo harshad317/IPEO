@@ -322,6 +322,40 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         source_avg = next(selection for selection in selections if selection.method == "source_average")
         source_train_calls = len(source_models) * len(pool) * len(train_examples)
         source_validation_calls = len(source_models) * len(pool) * len(val_examples)
+        source_train_cost = cost_ledger.method_estimated_cost(
+            "fixed_pool",
+            run_id=run_id,
+            phase="baseline_optimization",
+            model_ids=set(source_models),
+            task_id=task.task_id,
+        )
+        source_validation_cost = cost_ledger.method_estimated_cost(
+            "fixed_pool",
+            run_id=run_id,
+            phase="calibration",
+            model_ids=set(source_models),
+            task_id=task.task_id,
+        )
+        target_bo_prompt_ids = {prompt.prompt_id for prompt in pool[: min(8, len(pool))]}
+        target_pool_val_cost = cost_ledger.method_estimated_cost(
+            "fixed_pool",
+            run_id=run_id,
+            phase="calibration",
+            model_ids={args.fold_target},
+            task_id=task.task_id,
+            prompt_ids=target_bo_prompt_ids,
+        )
+        final_cost_by_prompt = {
+            prompt.prompt_id: cost_ledger.method_estimated_cost(
+                "selected_methods",
+                run_id=run_id,
+                phase="final_test",
+                model_ids={args.fold_target},
+                task_id=task.task_id,
+                prompt_ids={prompt.prompt_id},
+            )
+            for prompt in final_prompts
+        }
         source_call_methods = {
             "source_average",
             "pooled_source",
@@ -336,9 +370,21 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         }
         source_calls_by_method = {method: source_validation_calls for method in source_call_methods}
         source_calls_by_method.update({method: source_train_calls for method in ipeo_source_call_methods})
+        dollars_by_method = {method: source_validation_cost for method in source_call_methods}
+        dollars_by_method.update({method: source_train_cost for method in ipeo_source_call_methods})
         for model_id in source_models:
             source_calls_by_method[f"best_source_transfer:{model_id}"] = len(pool) * len(val_examples)
+            dollars_by_method[f"best_source_transfer:{model_id}"] = cost_ledger.method_estimated_cost(
+                "fixed_pool",
+                run_id=run_id,
+                phase="calibration",
+                model_ids={model_id},
+                task_id=task.task_id,
+            )
         target_calls_by_method = {"target_only_bo_fixed_pool": min(8, len(pool)) * len(val_examples), "ipeo_zero": 0}
+        dollars_by_method["target_only_bo_fixed_pool"] = target_pool_val_cost
+        for selection in selections:
+            dollars_by_method[selection.method] = dollars_by_method.get(selection.method, 0.0) + final_cost_by_prompt.get(selection.prompt_id, 0.0)
         task_access_rows = [
             access_row(
                 task_id=task.task_id,
@@ -365,11 +411,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             source_average_prompt_id=source_avg.prompt_id,
             source_calls_by_method=source_calls_by_method,
             target_calls_by_method=target_calls_by_method,
-            dollars_by_method={
-                "ipeo_zero": cost_ledger.method_cost("fixed_pool", phase="baseline_optimization", model_ids=set(source_models)),
-                "ipeo_select_existing": cost_ledger.method_cost("fixed_pool", phase="baseline_optimization", model_ids=set(source_models)),
-                "ipeo_composed_vs_existing": cost_ledger.method_cost("fixed_pool", phase="baseline_optimization", model_ids=set(source_models)),
-            },
+            dollars_by_method=dollars_by_method,
             method_access_by_method=access_rows_by_method(task_access_rows),
         )
         all_transfer_rows.extend(rows)

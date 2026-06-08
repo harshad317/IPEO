@@ -84,29 +84,40 @@ class CostLedger:
     def method_cost(
         self,
         method: str,
+        run_id: str | None = None,
         phase: str | None = None,
         model_ids: set[str] | None = None,
         task_id: str | None = None,
         prompt_ids: set[str] | None = None,
     ) -> float:
         total = 0.0
-        for row in read_jsonl(self.path):
-            if row.get("method") != method:
-                continue
-            if phase is not None and row.get("phase") != phase:
-                continue
-            if model_ids is not None and row.get("model_id") not in model_ids:
-                continue
-            if task_id is not None and row.get("task_id") != task_id:
-                continue
-            if prompt_ids is not None and row.get("prompt_id") not in prompt_ids:
-                continue
+        for row in self._matching_rows(method, run_id=run_id, phase=phase, model_ids=model_ids, task_id=task_id, prompt_ids=prompt_ids):
             total += float(row.get("dollar_cost", 0.0))
+        return total
+
+    def method_estimated_cost(
+        self,
+        method: str,
+        run_id: str | None = None,
+        phase: str | None = None,
+        model_ids: set[str] | None = None,
+        task_id: str | None = None,
+        prompt_ids: set[str] | None = None,
+    ) -> float:
+        """Return fair benchmark cost, billing cached rows as if uncached."""
+
+        total = 0.0
+        for row in self._matching_rows(method, run_id=run_id, phase=phase, model_ids=model_ids, task_id=task_id, prompt_ids=prompt_ids):
+            total += (
+                float(row.get("input_tokens", 0.0)) / 1000 * float(row.get("api_price_input", 0.0))
+                + float(row.get("output_tokens", 0.0)) / 1000 * float(row.get("api_price_output", 0.0))
+            )
         return total
 
     def method_calls(
         self,
         method: str,
+        run_id: str | None = None,
         model_ids: set[str] | None = None,
         task_id: str | None = None,
         prompt_ids: set[str] | None = None,
@@ -114,6 +125,8 @@ class CostLedger:
         total = 0
         for row in read_jsonl(self.path):
             if row.get("method") != method:
+                continue
+            if run_id is not None and row.get("run_id") != run_id:
                 continue
             if row.get("cache_hit"):
                 continue
@@ -125,3 +138,29 @@ class CostLedger:
                 continue
             total += 1
         return total
+
+    def _matching_rows(
+        self,
+        method: str,
+        run_id: str | None = None,
+        phase: str | None = None,
+        model_ids: set[str] | None = None,
+        task_id: str | None = None,
+        prompt_ids: set[str] | None = None,
+    ) -> list[dict]:
+        rows = []
+        for row in read_jsonl(self.path):
+            if row.get("method") != method:
+                continue
+            if run_id is not None and row.get("run_id") != run_id:
+                continue
+            if phase is not None and row.get("phase") != phase:
+                continue
+            if model_ids is not None and row.get("model_id") not in model_ids:
+                continue
+            if task_id is not None and row.get("task_id") != task_id:
+                continue
+            if prompt_ids is not None and row.get("prompt_id") not in prompt_ids:
+                continue
+            rows.append(row)
+        return rows

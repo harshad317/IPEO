@@ -436,21 +436,24 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         source_average_prompt_id = next((selection.prompt_id for selection in selections if selection.method == "source_average"), selections[0].prompt_id)
         source_train_calls = len(source_models) * len(pool) * len(train_examples)
         source_validation_calls = len(source_models) * len(pool) * len(val_examples)
-        source_train_cost = cost_ledger.method_cost(
+        source_train_cost = cost_ledger.method_estimated_cost(
             "fixed_pool",
+            run_id=run_id,
             phase="baseline_optimization",
             model_ids=set(source_models),
             task_id=task.task_id,
         )
-        source_validation_cost = cost_ledger.method_cost(
+        source_validation_cost = cost_ledger.method_estimated_cost(
             "fixed_pool",
+            run_id=run_id,
             phase="calibration",
             model_ids=set(source_models),
             task_id=task.task_id,
         )
         final_cost_by_prompt = {
-            prompt.prompt_id: cost_ledger.method_cost(
+            prompt.prompt_id: cost_ledger.method_estimated_cost(
                 "selected_methods",
+                run_id=run_id,
                 phase="final_test",
                 model_ids={fold_target},
                 task_id=task.task_id,
@@ -459,8 +462,9 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             for prompt in final_prompts
         }
         target_bo_prompt_ids = {prompt.prompt_id for prompt in pool[: min(8, len(pool))]}
-        target_pool_val_cost = cost_ledger.method_cost(
+        target_pool_val_cost = cost_ledger.method_estimated_cost(
             "fixed_pool",
+            run_id=run_id,
             phase="calibration",
             model_ids={fold_target},
             task_id=task.task_id,
@@ -515,8 +519,9 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         for model_id in source_models:
             source_calls_by_method[f"best_source_transfer:{model_id}"] = len(pool) * len(val_examples)
             dollars_by_method[f"best_source_transfer:{model_id}"] = (
-                cost_ledger.method_cost(
+                cost_ledger.method_estimated_cost(
                     "fixed_pool",
+                    run_id=run_id,
                     phase="calibration",
                     model_ids={model_id},
                     task_id=task.task_id,

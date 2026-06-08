@@ -57,6 +57,11 @@ The main comparison tracks are:
 No method is allowed to use target test for selection; target test is evaluated
 only after method selection is complete.
 
+`total_dollars` in benchmark tables is a **fair estimated uncached cost** based
+on logged token counts and model prices. The cache can reduce what you actually
+pay during repeated local runs, but cached source baselines are still charged
+fairly in the benchmark reports.
+
 ## Analyze A Completed Run
 
 After a benchmark finishes, summarize per-task winners, benchmark tracks,
