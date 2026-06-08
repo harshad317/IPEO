@@ -94,3 +94,6 @@ def test_cost_ledger_aggregates(tmp_path: Path) -> None:
     agg = ledger.aggregate()
     assert agg["calls"] == 1.0
     assert agg["dollars"] > 0
+    assert ledger.method_cost("unit", task_id="gsm8k", prompt_ids={pool[0].prompt_id}) > 0
+    assert ledger.method_cost("unit", task_id="ifbench") == 0
+    assert ledger.method_calls("unit", task_id="gsm8k", prompt_ids={pool[0].prompt_id}) == 1

@@ -9,6 +9,11 @@ baselines:
     - target_only_bo_fixed_pool
     - asha_fixed_pool
     - promptbridge_emulation
+  ipeo_ablations:
+    - ipeo_zero
+    - ipeo_no_generic
+    - ipeo_no_cost
+    - ipeo_no_generic_no_cost
   optional_official:
     - gepa
     - miprov2

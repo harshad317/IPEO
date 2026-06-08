@@ -81,7 +81,14 @@ class CostLedger:
             "output_tokens": float(sum(row.get("output_tokens", 0) for row in rows)),
         }
 
-    def method_cost(self, method: str, phase: str | None = None, model_ids: set[str] | None = None) -> float:
+    def method_cost(
+        self,
+        method: str,
+        phase: str | None = None,
+        model_ids: set[str] | None = None,
+        task_id: str | None = None,
+        prompt_ids: set[str] | None = None,
+    ) -> float:
         total = 0.0
         for row in read_jsonl(self.path):
             if row.get("method") != method:
@@ -90,10 +97,20 @@ class CostLedger:
                 continue
             if model_ids is not None and row.get("model_id") not in model_ids:
                 continue
+            if task_id is not None and row.get("task_id") != task_id:
+                continue
+            if prompt_ids is not None and row.get("prompt_id") not in prompt_ids:
+                continue
             total += float(row.get("dollar_cost", 0.0))
         return total
 
-    def method_calls(self, method: str, model_ids: set[str] | None = None) -> int:
+    def method_calls(
+        self,
+        method: str,
+        model_ids: set[str] | None = None,
+        task_id: str | None = None,
+        prompt_ids: set[str] | None = None,
+    ) -> int:
         total = 0
         for row in read_jsonl(self.path):
             if row.get("method") != method:
@@ -101,6 +118,10 @@ class CostLedger:
             if row.get("cache_hit"):
                 continue
             if model_ids is not None and row.get("model_id") not in model_ids:
+                continue
+            if task_id is not None and row.get("task_id") != task_id:
+                continue
+            if prompt_ids is not None and row.get("prompt_id") not in prompt_ids:
                 continue
             total += 1
         return total

@@ -43,6 +43,9 @@ FIXED_POOL_METHODS = {
     "promptbridge_emulation",
     "best_source_transfer",
     "ipeo_zero",
+    "ipeo_no_generic",
+    "ipeo_no_cost",
+    "ipeo_no_generic_no_cost",
 }
 OFFICIAL_METHOD_ALIASES = {
     "gepa": "gepa",
@@ -200,8 +203,9 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         pool_results = pool_val_results + pool_test_results
 
         selections: list[MethodSelection] = []
-        ipeo_prompt: PromptCandidate | None = None
-        if "ipeo_zero" in fixed_methods:
+        ipeo_prompts: list[PromptCandidate] = []
+        ipeo_methods = fixed_methods & {"ipeo_zero", "ipeo_no_generic", "ipeo_no_cost", "ipeo_no_generic_no_cost"}
+        if ipeo_methods:
             reporter.status(f"Task {task.task_id}: estimating invariant edit effects from {args.model} source environments")
             invariant_table = estimate_invariant_effects(
                 task_id=task.task_id,
@@ -214,19 +218,31 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 seed=args.seed,
             )
             write_jsonl(artifact_dir / "stats" / f"{task.task_id}_invariant_edits.jsonl", invariant_table)
-            ipeo_prompt, ipeo_selection = select_zero_target_prompt(
-                task_id=task.task_id,
-                seed_prompt=pool[0],
-                edits=edits,
-                invariant_table=invariant_table,
-                fold_id=fold_id,
-                target_model=fold_target,
-                source_models=source_models,
-                max_edits_per_prompt=invariant_config.max_edits_per_prompt,
-                min_sign_agreement=invariant_config.min_sign_agreement,
-                min_lcb=-0.05,
-            )
-            selections.append(ipeo_selection)
+            ipeo_variant_configs = {
+                "ipeo_zero": {"exclude_generic": False, "exclude_edit_types": set()},
+                "ipeo_no_generic": {"exclude_generic": True, "exclude_edit_types": set()},
+                "ipeo_no_cost": {"exclude_generic": False, "exclude_edit_types": {"cost_reduction"}},
+                "ipeo_no_generic_no_cost": {"exclude_generic": True, "exclude_edit_types": {"cost_reduction"}},
+            }
+            for method_name in sorted(ipeo_methods):
+                variant = ipeo_variant_configs[method_name]
+                ipeo_prompt, ipeo_selection = select_zero_target_prompt(
+                    task_id=task.task_id,
+                    seed_prompt=pool[0],
+                    edits=edits,
+                    invariant_table=invariant_table,
+                    fold_id=fold_id,
+                    target_model=fold_target,
+                    source_models=source_models,
+                    max_edits_per_prompt=invariant_config.max_edits_per_prompt,
+                    min_sign_agreement=invariant_config.min_sign_agreement,
+                    min_lcb=-0.05,
+                    exclude_generic=variant["exclude_generic"],
+                    exclude_edit_types=variant["exclude_edit_types"],
+                    method_name=method_name,
+                )
+                ipeo_prompts.append(ipeo_prompt)
+                selections.append(ipeo_selection)
 
         if "original" in fixed_methods:
             selections.append(original_prompt(task_id=task.task_id, fold_id=fold_id, target_model=fold_target, source_models=source_models, pool=pool))
@@ -248,7 +264,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             selections.extend(best_source_transfer(task_id=task.task_id, fold_id=fold_id, target_model=fold_target, source_models=source_models, pool=pool, eval_results=pool_results))
 
         write_jsonl(artifact_dir / "stats" / f"{task.task_id}_method_selections.jsonl", selections)
-        prompt_pool = pool + ([ipeo_prompt] if ipeo_prompt is not None else [])
+        prompt_pool = pool + ipeo_prompts
         final_prompts = _dedupe_prompts([_selection_to_prompt(selection, prompt_pool) for selection in selections])
         reporter.status(f"Task {task.task_id}: evaluating selected methods on target {args.model} environment")
         final_results = evaluate_pool(
@@ -270,12 +286,69 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         )
         source_average_prompt_id = next((selection.prompt_id for selection in selections if selection.method == "source_average"), selections[0].prompt_id)
         source_eval_calls = len(source_models) * len(pool) * len(val_examples)
+        source_eval_cost = cost_ledger.method_cost(
+            "fixed_pool",
+            phase="evaluation",
+            model_ids=set(source_models),
+            task_id=task.task_id,
+        )
+        final_cost_by_prompt = {
+            prompt.prompt_id: cost_ledger.method_cost(
+                "selected_methods",
+                phase="final_test",
+                model_ids={fold_target},
+                task_id=task.task_id,
+                prompt_ids={prompt.prompt_id},
+            )
+            for prompt in final_prompts
+        }
+        target_bo_prompt_ids = {prompt.prompt_id for prompt in pool[: min(8, len(pool))]}
+        target_pool_val_cost = cost_ledger.method_cost(
+            "fixed_pool",
+            phase="evaluation",
+            model_ids={fold_target},
+            task_id=task.task_id,
+            prompt_ids=target_bo_prompt_ids,
+        )
         source_calls_by_method = {
             method: source_eval_calls
-            for method in {"source_average", "pooled_source", "worst_source_robust", "asha_fixed_pool", "ipeo_zero"}
+            for method in {
+                "source_average",
+                "pooled_source",
+                "worst_source_robust",
+                "asha_fixed_pool",
+                "ipeo_zero",
+                "ipeo_no_generic",
+                "ipeo_no_cost",
+                "ipeo_no_generic_no_cost",
+            }
+        }
+        dollars_by_method = {
+            method: source_eval_cost
+            for method in {
+                "source_average",
+                "pooled_source",
+                "worst_source_robust",
+                "asha_fixed_pool",
+                "ipeo_zero",
+                "ipeo_no_generic",
+                "ipeo_no_cost",
+                "ipeo_no_generic_no_cost",
+            }
         }
         for model_id in source_models:
             source_calls_by_method[f"best_source_transfer:{model_id}"] = len(pool) * len(val_examples)
+            dollars_by_method[f"best_source_transfer:{model_id}"] = (
+                cost_ledger.method_cost(
+                    "fixed_pool",
+                    phase="evaluation",
+                    model_ids={model_id},
+                    task_id=task.task_id,
+                )
+            )
+        dollars_by_method.update({"target_only_bo_fixed_pool": target_pool_val_cost})
+        for selection in selections:
+            dollars_by_method[selection.method] = dollars_by_method.get(selection.method, 0.0) + final_cost_by_prompt.get(selection.prompt_id, 0.0)
         rows = build_transfer_rows(
             task_id=task.task_id,
             fold_id=fold_id,
@@ -287,8 +360,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             pool=pool,
             source_average_prompt_id=source_average_prompt_id,
             source_calls_by_method=source_calls_by_method,
-            target_calls_by_method={"target_only_bo_fixed_pool": min(8, len(pool)) * len(val_examples), "ipeo_zero": 0},
-            dollars_by_method={"ipeo_zero": cost_ledger.method_cost("fixed_pool", model_ids=set(source_models))},
+            target_calls_by_method={"target_only_bo_fixed_pool": min(8, len(pool)) * len(val_examples)},
+            dollars_by_method=dollars_by_method,
         )
         all_transfer_rows.extend(rows)
         reporter.summary_table(f"{task.task_id} transfer regret", rows)

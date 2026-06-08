@@ -48,5 +48,15 @@ python -m ipeo.runners.run_openai \
   --cost_log artifacts/gpt41mini_benchmark/costs/run.jsonl
 ```
 
-`--methods all` runs the implemented fixed-pool methods and records requested
-official optimizer status for GEPA, MIPROv2, and CAPO.
+`--methods all` runs the implemented fixed-pool methods, IPEO ablations, and
+records requested official optimizer status for GEPA, MIPROv2, and CAPO.
+
+Useful IPEO ablations:
+
+```bash
+--methods ipeo_zero ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
+```
+
+Official optimizer records are status-only until the runner invokes the actual
+external optimizer package. Installed-but-not-run optimizers are marked
+`not_implemented`; missing packages are marked `skipped`.

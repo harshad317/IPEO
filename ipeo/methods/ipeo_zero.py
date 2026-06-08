@@ -22,8 +22,11 @@ def select_zero_target_prompt(
     min_sign_agreement: float = 1.0,
     min_lcb: float = 0.0,
     exclude_generic: bool = False,
+    exclude_edit_types: set[str] | None = None,
+    method_name: str = "ipeo_zero",
 ) -> tuple[PromptCandidate, MethodSelection]:
     edit_by_id = {edit.edit_id: edit for edit in edits}
+    exclude_edit_types = exclude_edit_types or set()
     selected: list[AtomicEdit] = []
     token_budget = max_prompt_tokens or int(count_tokens(seed_prompt.text) * 1.5) + 32
     for row in invariant_table:
@@ -36,6 +39,8 @@ def select_zero_target_prompt(
             continue
         if row.is_generic and exclude_generic:
             continue
+        if row.edit_type in exclude_edit_types:
+            continue
         if has_conflict(edit, selected):
             continue
         proposed = selected + [edit]
@@ -47,7 +52,7 @@ def select_zero_target_prompt(
 
     text = compose_text(seed_prompt.text, selected)
     prompt_id = stable_hash(
-        {"method": "ipeo_zero", "task": task_id, "fold": fold_id, "text": text},
+        {"method": method_name, "task": task_id, "fold": fold_id, "text": text},
         prefix="p-ipeo-",
     )
     edit_ids = [edit.edit_id for edit in selected]
@@ -66,7 +71,7 @@ def select_zero_target_prompt(
         frozen_pool_version="mvp-v1",
     )
     selection = MethodSelection(
-        method="ipeo_zero",
+        method=method_name,
         task_id=task_id,
         fold_id=fold_id,
         target_model=target_model,

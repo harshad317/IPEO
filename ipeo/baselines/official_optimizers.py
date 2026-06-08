@@ -1,10 +1,4 @@
-"""Official optimizer integration status records.
-
-The offline MVP records these baselines every run. Actual optimizer execution is
-reserved for a live/API runner because GEPA, MIPROv2, and CAPO require their
-own package-level task/program abstractions and usually paid or local LLM
-backends.
-"""
+"""Official optimizer integration status records."""
 
 from __future__ import annotations
 
@@ -38,7 +32,7 @@ def _record_from_status(status: OptionalBaselineStatus) -> OfficialOptimizerReco
         )
     return OfficialOptimizerRecord(
         name=status.name,
-        status="available_not_run",
+        status="not_implemented",
         package=status.package,
-        reason="offline dry run records availability; live official optimizer execution belongs in an API-backed runner",
+        reason="package is installed, but this runner does not yet execute the official optimizer",
     )

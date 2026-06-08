@@ -8,14 +8,15 @@ from ipeo.runners.run_openai import normalize_methods
 
 
 def test_normalize_methods_accepts_commas_and_aliases() -> None:
-    fixed, official = normalize_methods(["ipeo_zero,source_average", "gepa", "mipro", "capo"])
-    assert fixed == {"ipeo_zero", "source_average"}
+    fixed, official = normalize_methods(["ipeo_zero,ipeo_no_generic,source_average", "gepa", "mipro", "capo"])
+    assert fixed == {"ipeo_zero", "ipeo_no_generic", "source_average"}
     assert official == {"gepa", "miprov2", "capo"}
 
 
 def test_normalize_methods_all_expands() -> None:
     fixed, official = normalize_methods(["all"])
     assert "ipeo_zero" in fixed
+    assert {"ipeo_no_generic", "ipeo_no_cost", "ipeo_no_generic_no_cost"} <= fixed
     assert {"gepa", "miprov2", "capo"} <= official
 
 
