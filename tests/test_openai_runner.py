@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from ipeo.core.schemas import GenerationConfig
-from ipeo.models.openai_adapter import OpenAIResponsesAdapter, build_openai_environments
+from ipeo.models.openai_adapter import OpenAIResponsesAdapter, build_openai_environments, clamp_openai_max_output_tokens
 from ipeo.runners.run_openai import normalize_methods
 
 
@@ -28,6 +28,12 @@ def test_openai_environments_use_single_api_model() -> None:
     assert len({env.model_id for env in envs}) == 4
     assert {env.timeout_seconds for env in envs} == {300}
     assert {env.max_retries for env in envs} == {7}
+
+
+def test_openai_max_output_tokens_are_clamped_to_provider_minimum() -> None:
+    assert clamp_openai_max_output_tokens(12) == 16
+    assert clamp_openai_max_output_tokens(16) == 16
+    assert clamp_openai_max_output_tokens(96) == 96
 
 
 def test_openai_adapter_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

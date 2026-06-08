@@ -17,6 +17,11 @@ from ipeo.models.base import count_tokens
 
 GPT_41_MINI_INPUT_PER_1K = 0.0004
 GPT_41_MINI_OUTPUT_PER_1K = 0.0016
+OPENAI_MIN_OUTPUT_TOKENS = 16
+
+
+def clamp_openai_max_output_tokens(max_tokens: int) -> int:
+    return max(OPENAI_MIN_OUTPUT_TOKENS, int(max_tokens))
 
 
 def _pricing_for_model(model: str) -> tuple[float, float]:
@@ -80,7 +85,7 @@ class OpenAIResponsesAdapter:
                 {"role": "user", "content": input},
             ],
             "temperature": config.temperature,
-            "max_output_tokens": config.max_tokens,
+            "max_output_tokens": clamp_openai_max_output_tokens(config.max_tokens),
         }
         if config.top_p != 1.0:
             payload["top_p"] = config.top_p

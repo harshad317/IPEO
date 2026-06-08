@@ -30,7 +30,7 @@ from ipeo.methods.ipeo_zero import (
     select_existing_prompt_by_invariant_score,
     select_zero_target_prompt,
 )
-from ipeo.models.openai_adapter import build_openai_environments
+from ipeo.models.openai_adapter import build_openai_environments, clamp_openai_max_output_tokens
 from ipeo.prompts.pool_builder import build_frozen_pool
 from ipeo.runners.progress import ProgressSettings, RichRunReporter
 from ipeo.stats.ipeo_compare import build_composed_vs_existing_row
@@ -176,7 +176,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     for task in get_tasks(args.tasks):
         generation_config = GenerationConfig(
             temperature=args.temperature,
-            max_tokens=args.max_tokens if args.max_tokens is not None else task.max_tokens,
+            max_tokens=clamp_openai_max_output_tokens(args.max_tokens if args.max_tokens is not None else task.max_tokens),
         )
         reporter.status(f"Task {task.task_id}: building frozen pool")
         pool, edits = build_frozen_pool(task.task_id, num_prompts=args.num_prompts, seed=args.seed, artifact_dir=artifact_dir)
