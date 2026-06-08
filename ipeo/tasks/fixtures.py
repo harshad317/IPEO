@@ -152,3 +152,149 @@ def ifbench_examples(total: int = 180) -> list[Example]:
             )
         )
     return rows
+
+
+def ifbench_hard_examples(total: int = 180) -> list[Example]:
+    """Harder local instruction-following stress fixture.
+
+    Each item has multiple independently verifiable constraints. This is meant
+    to expose cases where picking one whole source-best prompt can overfit a
+    narrow formatting habit, while composing invariant edits can still help.
+    """
+
+    constraints = [
+        {
+            "kind": "compound_lines_keywords_suffix",
+            "input": (
+                "Hard IFBench: Write exactly 3 non-empty lines about climate adaptation. "
+                "Include the keyword tide exactly 2 times across the entire response. "
+                "End the final line with the exact token <DONE>. Do not use bullet symbols."
+            ),
+            "gold": {
+                "kind": "all",
+                "constraints": [
+                    {"kind": "line_count", "n": 3},
+                    {"kind": "keyword_exact", "keyword": "tide", "n": 2},
+                    {"kind": "suffix", "suffix": "<DONE>"},
+                    {"kind": "forbidden_substrings", "substrings": ["- ", "* ", "1.", "1)"]},
+                ],
+            },
+        },
+        {
+            "kind": "json_exact_fields",
+            "input": (
+                "Hard IFBench: Return only a JSON object with exactly the keys summary, risk, and action. "
+                "The value for risk must be the string low. Do not wrap the JSON in markdown."
+            ),
+            "gold": {
+                "kind": "all",
+                "constraints": [
+                    {"kind": "json_keys", "keys": ["summary", "risk", "action"]},
+                    {"kind": "json_value", "key": "risk", "value": "low"},
+                    {"kind": "forbidden_substrings", "substrings": ["```", "json\n"]},
+                ],
+            },
+        },
+        {
+            "kind": "word_count_uppercase_keyword",
+            "input": (
+                "Hard IFBench: Write exactly 6 words. Every alphabetic letter must be uppercase. "
+                "Include the token FOCUS exactly once."
+            ),
+            "gold": {
+                "kind": "all",
+                "constraints": [
+                    {"kind": "word_count", "n": 6},
+                    {"kind": "uppercase"},
+                    {"kind": "keyword_exact", "keyword": "FOCUS", "n": 1},
+                ],
+            },
+        },
+        {
+            "kind": "csv_row",
+            "input": (
+                "Hard IFBench: Return one CSV row with exactly 4 comma-separated fields and no header. "
+                "The fields should be city, country, river, code. The code field must be ZX-7."
+            ),
+            "gold": {
+                "kind": "all",
+                "constraints": [
+                    {"kind": "csv_field_count", "n": 4},
+                    {"kind": "csv_field_value", "index": 3, "value": "ZX-7"},
+                    {"kind": "line_count", "n": 1},
+                ],
+            },
+        },
+        {
+            "kind": "numbered_lines_keyword_counts",
+            "input": (
+                "Hard IFBench: Output exactly 4 numbered lines using the pattern '1)' through '4)'. "
+                "Include apple exactly once and banana exactly twice across the entire response."
+            ),
+            "gold": {
+                "kind": "all",
+                "constraints": [
+                    {"kind": "numbered_lines", "n": 4, "style": "paren"},
+                    {"kind": "keyword_exact", "keyword": "apple", "n": 1},
+                    {"kind": "keyword_exact", "keyword": "banana", "n": 2},
+                ],
+            },
+        },
+        {
+            "kind": "paragraph_suffix_forbidden",
+            "input": (
+                "Hard IFBench: Write exactly 2 paragraphs about release planning. "
+                "The final paragraph must end with ENDCAP. Do not use the words maybe or soon."
+            ),
+            "gold": {
+                "kind": "all",
+                "constraints": [
+                    {"kind": "paragraph_count", "n": 2},
+                    {"kind": "suffix", "suffix": "ENDCAP"},
+                    {"kind": "forbidden_words", "words": ["maybe", "soon"]},
+                ],
+            },
+        },
+        {
+            "kind": "first_last_word_count",
+            "input": (
+                "Hard IFBench: Write exactly 5 words. The first word must be Atlas and the last word must be omega."
+            ),
+            "gold": {
+                "kind": "all",
+                "constraints": [
+                    {"kind": "word_count", "n": 5},
+                    {"kind": "starts_with", "prefix": "Atlas"},
+                    {"kind": "ends_with_word", "word": "omega"},
+                ],
+            },
+        },
+        {
+            "kind": "sentence_and_punctuation",
+            "input": (
+                "Hard IFBench: Write exactly 2 sentences about verification. "
+                "Exactly one sentence must end with a question mark."
+            ),
+            "gold": {
+                "kind": "all",
+                "constraints": [
+                    {"kind": "sentence_count", "n": 2},
+                    {"kind": "terminal_question_count", "n": 1},
+                ],
+            },
+        },
+    ]
+    rows: list[Example] = []
+    for i in range(total):
+        item = constraints[i % len(constraints)]
+        rows.append(
+            Example(
+                example_id=f"ifbench-hard-{i:04d}",
+                task_id="ifbench_hard",
+                split=_split_for_index(i),
+                input=item["input"],
+                gold=item["gold"],
+                meta={"constraint_kind": item["kind"], "stress_fixture": True},
+            )
+        )
+    return rows

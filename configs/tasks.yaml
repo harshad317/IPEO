@@ -14,3 +14,9 @@ tasks:
   ifbench:
     metric: constraint_accuracy
     max_tokens: 96
+  ifbench_hard:
+    metric: constraint_accuracy
+    max_tokens: 160
+  ifbench_official:
+    metric: official_ifbench_loose_accuracy
+    max_tokens: 512

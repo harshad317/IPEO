@@ -30,5 +30,13 @@ def seed_prompt_texts(task_id: str) -> list[str]:
             "Follow every explicit constraint exactly. Output only the requested response, with no explanation.",
             "Before answering, check formatting, counts, required words, and ending tokens internally. Then provide only the final compliant answer.",
         ],
+        "ifbench_hard": [
+            "Follow every explicit constraint as a hard requirement. Build the answer internally, verify each constraint, then output only the final response.",
+            "Treat counts, line boundaries, JSON/CSV structure, forbidden words, and suffix tokens as exact checks. Do not include any explanation.",
+        ],
+        "ifbench_official": [
+            "Follow every explicit instruction and constraint exactly. Output only the requested response, with no explanation.",
+            "Before answering, verify keyword counts, formatting, lengths, ordering, and forbidden content internally. Then provide only the final compliant answer.",
+        ],
     }
     return common + task_specific[task_id]

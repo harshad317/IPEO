@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--no_color", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--max_tokens", type=int, default=64)
+    parser.add_argument("--max_tokens", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout_seconds", type=int, default=240)
     parser.add_argument("--max_retries", type=int, default=5)
@@ -151,7 +151,6 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     )
     cache = ResponseCache(args.cache_dir)
     cost_ledger = CostLedger(args.cost_log)
-    generation_config = GenerationConfig(temperature=args.temperature, max_tokens=args.max_tokens)
     invariant_config = InvariantScorerConfig(n_bootstrap=20)
     all_transfer_rows: list[dict[str, object]] = []
 
@@ -160,6 +159,10 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     write_jsonl(artifact_dir / "stats" / "requested_official_methods.jsonl", official_records)
 
     for task in get_tasks(args.tasks):
+        generation_config = GenerationConfig(
+            temperature=args.temperature,
+            max_tokens=args.max_tokens if args.max_tokens is not None else task.max_tokens,
+        )
         reporter.status(f"Task {task.task_id}: building frozen pool")
         pool, edits = build_frozen_pool(task.task_id, num_prompts=args.num_prompts, seed=args.seed, artifact_dir=artifact_dir)
         val_examples = task.load_split("val", args.num_examples)

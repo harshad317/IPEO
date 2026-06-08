@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import re
-import json
 from dataclasses import dataclass
 from typing import Any
 
 from ipeo.core.schemas import Example
 from ipeo.tasks.base import exact_match, parse_first_number, token_f1
-from ipeo.tasks.fixtures import bbh_examples, classification_examples, extraction_qa_examples, gsm8k_examples, ifbench_examples
+from ipeo.tasks.fixtures import (
+    bbh_examples,
+    classification_examples,
+    extraction_qa_examples,
+    gsm8k_examples,
+    ifbench_examples,
+    ifbench_hard_examples,
+)
+from ipeo.tasks.ifbench_official import (
+    OFFICIAL_TASK_ID,
+    ensure_official_ifbench_evaluator_available,
+    load_official_ifbench_examples,
+    score_local_ifbench_constraint,
+    score_official_ifbench_response,
+)
 
 
 @dataclass
@@ -39,7 +52,7 @@ class SimpleTask:
                 if re.search(rf"\b{re.escape(label)}\b", lowered):
                     return {"answer": label, "raw": raw_output}
             return {"answer": lowered.strip().split()[0] if lowered.strip() else "", "raw": raw_output}
-        if self.task_id == "ifbench":
+        if self.task_id in {"ifbench", "ifbench_hard", OFFICIAL_TASK_ID}:
             return {"answer": raw_output.strip(), "raw": raw_output}
         answer = raw_output.strip().splitlines()[0].strip()
         answer = re.sub(r"^(answer|final)\s*:\s*", "", answer, flags=re.I)
@@ -49,8 +62,10 @@ class SimpleTask:
         answer = "" if parsed.get("answer") is None else str(parsed.get("answer"))
         if self.task_id == "extraction_qa":
             return token_f1(answer, str(gold))
-        if self.task_id == "ifbench":
-            return score_ifbench_response(answer, gold)
+        if self.task_id in {"ifbench", "ifbench_hard"}:
+            return score_local_ifbench_constraint(answer, gold)
+        if self.task_id == OFFICIAL_TASK_ID:
+            return score_official_ifbench_response(answer, gold)
         return exact_match(answer, str(gold))
 
 
@@ -65,37 +80,14 @@ def get_task(task_id: str) -> SimpleTask:
         return SimpleTask(task_id, "token_f1", 16, extraction_qa_examples())
     if task_id == "ifbench":
         return SimpleTask(task_id, "constraint_accuracy", 96, ifbench_examples())
+    if task_id == "ifbench_hard":
+        return SimpleTask(task_id, "constraint_accuracy", 160, ifbench_hard_examples())
+    if task_id == OFFICIAL_TASK_ID:
+        examples = load_official_ifbench_examples()
+        ensure_official_ifbench_evaluator_available(examples[0].gold if examples else None)
+        return SimpleTask(task_id, "official_ifbench_loose_accuracy", 512, examples)
     raise ValueError(f"Unknown task_id: {task_id}")
 
 
 def get_tasks(task_ids: list[str]) -> list[SimpleTask]:
     return [get_task(task_id) for task_id in task_ids]
-
-
-def score_ifbench_response(answer: str, gold: Any) -> float:
-    if not isinstance(gold, dict):
-        return 0.0
-    kind = gold.get("kind")
-    stripped = answer.strip()
-    if kind == "word_count":
-        words = re.findall(r"\b[\w'<>\-]+\b", stripped)
-        return float(len(words) == int(gold["n"]))
-    if kind == "keyword_exact":
-        keyword = str(gold["keyword"]).lower()
-        count = len(re.findall(rf"\b{re.escape(keyword)}\b", stripped.lower()))
-        return float(count == int(gold["n"]))
-    if kind == "line_count":
-        lines = [line for line in stripped.splitlines() if line.strip()]
-        return float(len(lines) == int(gold["n"]))
-    if kind == "uppercase":
-        letters = [ch for ch in stripped if ch.isalpha()]
-        return float(bool(letters) and all(ch.upper() == ch for ch in letters))
-    if kind == "suffix":
-        return float(stripped.endswith(str(gold["suffix"])))
-    if kind == "json_keys":
-        try:
-            obj = json.loads(stripped)
-        except json.JSONDecodeError:
-            return 0.0
-        return float(isinstance(obj, dict) and sorted(obj.keys()) == sorted(gold["keys"]))
-    return 0.0

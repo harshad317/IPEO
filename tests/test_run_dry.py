@@ -59,3 +59,25 @@ def test_ifbench_dry_run(tmp_path: Path) -> None:
     rows = run(args)
     assert rows
     assert any(row["task_id"] == "ifbench" for row in rows)
+
+
+def test_ifbench_hard_dry_run(tmp_path: Path) -> None:
+    args = argparse.Namespace(
+        tasks=["ifbench_hard"],
+        models=["mock_openai_a", "mock_openai_b", "mock_openai_c", "mock_openai_d"],
+        num_prompts=20,
+        num_examples=8,
+        fold_target="mock_openai_d",
+        cache_dir=str(tmp_path / "cache"),
+        cost_log=str(tmp_path / "artifacts" / "costs" / "dry_run.jsonl"),
+        artifact_dir=str(tmp_path / "artifacts"),
+        progress="off",
+        quiet=True,
+        no_color=True,
+        seed=0,
+    )
+    rows = run(args)
+    assert rows
+    assert any(row["task_id"] == "ifbench_hard" for row in rows)
+    scores = {row["method"]: row["target_score"] for row in rows}
+    assert scores["ipeo_zero"] > scores["source_average"]

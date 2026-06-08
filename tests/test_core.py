@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from ipeo.core.ids import stable_hash
@@ -69,6 +70,63 @@ def test_task_parsers_and_metrics() -> None:
     ifbench = get_task("ifbench")
     ex = ifbench.load_split("val", 1)[0]
     assert ifbench.score(ifbench.parse_output("coral reefs protect coral life."), ex.gold) == 1.0
+    hard = get_task("ifbench_hard")
+    hard_ex = hard.load_split("val", 1)[0]
+    assert hard.score(hard.parse_output('{"summary":"ready","risk":"low","action":"verify"}'), hard_ex.gold) == 1.0
+    assert hard.score(hard.parse_output('```json\n{"summary":"ready","risk":"low","action":"verify"}\n```'), hard_ex.gold) == 0.0
+
+
+def test_official_ifbench_adapter_uses_configured_repo(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "IFBench"
+    data_dir = repo / "data"
+    data_dir.mkdir(parents=True)
+    (repo / "evaluation_lib.py").write_text(
+        """
+import dataclasses
+
+@dataclasses.dataclass
+class InputExample:
+    key: str
+    instruction_id_list: list[str]
+    prompt: str
+    kwargs: list[dict]
+
+@dataclasses.dataclass
+class OutputExample:
+    instruction_id_list: list[str]
+    prompt: str
+    response: str
+    follow_all_instructions: bool
+    follow_instruction_list: list[bool]
+
+def test_instruction_following_loose(inp, prompt_to_response):
+    response = prompt_to_response[inp.prompt]
+    ok = response.strip() == "OK"
+    return OutputExample(inp.instruction_id_list, inp.prompt, response, ok, [ok])
+
+def test_instruction_following_strict(inp, prompt_to_response):
+    return test_instruction_following_loose(inp, prompt_to_response)
+""".strip(),
+        encoding="utf-8",
+    )
+    row = {
+        "key": "demo",
+        "prompt": "Say OK.",
+        "instruction_id_list": ["fake:ok"],
+        "kwargs": [{}],
+    }
+    (data_dir / "IFBench_test.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+    monkeypatch.setenv("IFBENCH_REPO", str(repo))
+
+    from ipeo.tasks.ifbench_official import _load_official_eval_lib
+
+    _load_official_eval_lib.cache_clear()
+    task = get_task("ifbench_official")
+    example = task.load_split("opt", 1)[0]
+    assert example.input == "Say OK."
+    assert task.score(task.parse_output("OK"), example.gold) == 1.0
+    assert task.score(task.parse_output("NO"), example.gold) == 0.0
+    _load_official_eval_lib.cache_clear()
 
 
 def test_cost_ledger_aggregates(tmp_path: Path) -> None:

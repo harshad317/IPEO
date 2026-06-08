@@ -60,3 +60,54 @@ Useful IPEO ablations:
 Official optimizer records are status-only until the runner invokes the actual
 external optimizer package. Installed-but-not-run optimizers are marked
 `not_implemented`; missing packages are marked `skipped`.
+
+## IFBench Stress Tests
+
+Use the harder local fixture first. It has compositional constraints for
+keyword counts, JSON/CSV exactness, line and paragraph counts, suffix tokens,
+forbidden words, and punctuation.
+
+```bash
+python -m ipeo.runners.run_openai \
+  --tasks ifbench_hard \
+  --model gpt-4.1-mini \
+  --num_prompts 20 \
+  --num_examples 24 \
+  --methods ipeo_no_generic_no_cost source_average pooled_source worst_source_robust asha_fixed_pool best_source_transfer \
+  --workers 8 \
+  --timeout_seconds 300 \
+  --max_retries 6 \
+  --max_tokens 160 \
+  --progress both \
+  --artifact_dir artifacts/gpt41mini_ifbench_hard \
+  --cache_dir artifacts/gpt41mini_ifbench_hard/cache \
+  --cost_log artifacts/gpt41mini_ifbench_hard/costs/run.jsonl
+```
+
+For the official AllenAI IFBench evaluator, clone the upstream repo and point
+IPEO at it. The adapter uses prompt-level loose accuracy by default, matching
+the upstream reporting note.
+
+```bash
+git clone https://github.com/allenai/IFBench.git external/IFBench
+export IFBENCH_REPO="$PWD/external/IFBench"
+python -m pip install -r "$IFBENCH_REPO/requirements.txt"
+
+python -m ipeo.runners.run_openai \
+  --tasks ifbench_official \
+  --model gpt-4.1-mini \
+  --num_prompts 20 \
+  --num_examples 24 \
+  --methods ipeo_no_generic_no_cost source_average pooled_source worst_source_robust asha_fixed_pool best_source_transfer \
+  --workers 8 \
+  --timeout_seconds 300 \
+  --max_retries 6 \
+  --max_tokens 512 \
+  --progress both \
+  --artifact_dir artifacts/gpt41mini_ifbench_official \
+  --cache_dir artifacts/gpt41mini_ifbench_official/cache \
+  --cost_log artifacts/gpt41mini_ifbench_official/costs/run.jsonl
+```
+
+Set `IFBENCH_DATA_PATH=/path/to/IFBench_test.jsonl` if the data file is outside
+the cloned repo. Set `IFBENCH_EVAL_MODE=strict` to use strict official scoring.

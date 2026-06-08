@@ -46,6 +46,24 @@ TASK_EDIT_SPECS = {
         ("verification", "Check counts, casing, required tokens, and JSON keys before finalizing.", "rubric", 11, False, False),
         ("verbosity_control", "Do not add explanations, apologies, markdown fences, or extra text.", "output_schema", 10, False, False),
     ],
+    "ifbench_hard": [
+        ("output_format", "Satisfy every visible formatting constraint exactly, including line, paragraph, JSON, CSV, and suffix requirements.", "output_schema", 14, False, False),
+        ("verification", "Create an internal checklist of all constraints and verify each one before finalizing.", "rubric", 12, False, False),
+        ("verbosity_control", "Do not add explanations, apologies, labels, markdown fences, headers, or extra text.", "output_schema", 12, False, False),
+        ("constraint_inventory", "Separate content instructions from hard constraints before drafting the final answer.", "rubric", 10, False, False),
+        ("count_verification", "Verify global counts across the entire response, not per line, sentence, or paragraph.", "rubric", 11, False, False),
+        ("format_lock", "When a structure is requested, emit exactly that structure and nothing around it.", "output_schema", 10, False, False),
+        ("forbidden_token_scan", "Scan the final response for forbidden words, bullet markers, markdown, and disallowed punctuation.", "postprocessing_hint", 12, False, False),
+    ],
+    "ifbench_official": [
+        ("output_format", "Satisfy every visible formatting constraint exactly, including lists, counts, ordering, templates, and line breaks.", "output_schema", 14, False, False),
+        ("verification", "Create an internal checklist of all instruction constraints and verify each one before finalizing.", "rubric", 12, False, False),
+        ("verbosity_control", "Do not add explanations, apologies, labels, markdown fences, headers, or extra text unless explicitly requested.", "output_schema", 13, False, False),
+        ("constraint_inventory", "Separate the user's content request from every hard instruction-following constraint before drafting.", "rubric", 11, False, False),
+        ("count_verification", "Verify all keyword, word, sentence, paragraph, and symbol counts globally before finalizing.", "rubric", 12, False, False),
+        ("format_lock", "For templates, lists, CSV, JSON, quotes, and whitespace constraints, emit exactly the requested structure.", "output_schema", 12, False, False),
+        ("forbidden_token_scan", "Scan the final response for forbidden words, unwanted wrappers, markdown, and incorrect separators.", "postprocessing_hint", 12, False, False),
+    ],
 }
 
 

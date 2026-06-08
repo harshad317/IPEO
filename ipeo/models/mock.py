@@ -21,6 +21,10 @@ FAMILY_WEIGHTS: dict[str, dict[str, float]] = {
         "extraction_boundary": 0.05,
         "cost_reduction": -0.02,
         "generic_hygiene": 0.03,
+        "constraint_inventory": 0.07,
+        "count_verification": 0.08,
+        "format_lock": 0.06,
+        "forbidden_token_scan": 0.05,
         "placebo": 0.0,
     },
     "mock_openai_b": {
@@ -32,6 +36,10 @@ FAMILY_WEIGHTS: dict[str, dict[str, float]] = {
         "extraction_boundary": 0.08,
         "cost_reduction": 0.01,
         "generic_hygiene": 0.03,
+        "constraint_inventory": 0.05,
+        "count_verification": 0.10,
+        "format_lock": 0.08,
+        "forbidden_token_scan": 0.05,
         "placebo": 0.0,
     },
     "mock_openai_c": {
@@ -43,6 +51,10 @@ FAMILY_WEIGHTS: dict[str, dict[str, float]] = {
         "extraction_boundary": 0.06,
         "cost_reduction": -0.01,
         "generic_hygiene": 0.02,
+        "constraint_inventory": 0.09,
+        "count_verification": 0.06,
+        "format_lock": 0.07,
+        "forbidden_token_scan": 0.06,
         "placebo": 0.0,
     },
     "mock_openai_d": {
@@ -54,6 +66,10 @@ FAMILY_WEIGHTS: dict[str, dict[str, float]] = {
         "extraction_boundary": 0.09,
         "cost_reduction": 0.02,
         "generic_hygiene": 0.02,
+        "constraint_inventory": 0.06,
+        "count_verification": 0.08,
+        "format_lock": 0.09,
+        "forbidden_token_scan": 0.07,
         "placebo": 0.0,
     },
 }
@@ -65,6 +81,8 @@ TASK_BASE = {
     "classification": 0.58,
     "extraction_qa": 0.54,
     "ifbench": 0.46,
+    "ifbench_hard": 0.32,
+    "ifbench_official": 0.28,
 }
 
 
@@ -94,6 +112,24 @@ TASK_EDIT_HINTS = {
         "verification": 0.12,
         "verbosity_control": 0.08,
     },
+    "ifbench_hard": {
+        "output_format": 0.09,
+        "verification": 0.09,
+        "verbosity_control": 0.07,
+        "constraint_inventory": 0.09,
+        "count_verification": 0.10,
+        "format_lock": 0.08,
+        "forbidden_token_scan": 0.07,
+    },
+    "ifbench_official": {
+        "output_format": 0.08,
+        "verification": 0.09,
+        "verbosity_control": 0.06,
+        "constraint_inventory": 0.09,
+        "count_verification": 0.10,
+        "format_lock": 0.08,
+        "forbidden_token_scan": 0.07,
+    },
 }
 
 
@@ -103,6 +139,8 @@ def _hash_unit(*parts: str) -> float:
 
 
 def _infer_task(input_text: str) -> str:
+    if "Hard IFBench:" in input_text:
+        return "ifbench_hard"
     if "Constraint:" in input_text:
         return "ifbench"
     if "stickers" in input_text:
@@ -146,6 +184,24 @@ def _gold_from_input(task_id: str, input_text: str) -> str:
         if "keys answer and confidence" in input_text:
             return '{"answer":"yes","confidence":1}'
         return "compliant"
+    if task_id == "ifbench_hard":
+        if "exactly 3 non-empty lines" in input_text and "tide" in input_text:
+            return "tide barriers rise\nplanners map calm routes\nsecond tide closes <DONE>"
+        if "exactly the keys summary, risk, and action" in input_text:
+            return '{"summary":"ready","risk":"low","action":"verify"}'
+        if "exactly 6 words" in input_text and "FOCUS" in input_text:
+            return "FOCUS BUILDS CLEAR STEADY DAILY MOMENTUM"
+        if "one CSV row" in input_text and "ZX-7" in input_text:
+            return "Oslo,Norway,Akerselva,ZX-7"
+        if "exactly 4 numbered lines" in input_text:
+            return "1) apple\n2) banana\n3) banana\n4) pear"
+        if "exactly 2 paragraphs" in input_text and "ENDCAP" in input_text:
+            return "Release plans align teams.\n\nFinal checks close ENDCAP"
+        if "first word must be Atlas" in input_text:
+            return "Atlas careful systems land omega"
+        if "exactly 2 sentences" in input_text and "question mark" in input_text:
+            return "Verification catches errors. Are counts correct?"
+        return "compliant"
     match = re.search(r"in ([A-Z][a-z]+) during", input_text)
     return match.group(1) if match else "unknown"
 
@@ -159,7 +215,7 @@ def _wrong_answer(task_id: str, gold: str) -> str:
     if task_id == "classification":
         labels = ["sports", "business", "science", "world"]
         return labels[(labels.index(gold) + 1) % len(labels)]
-    if task_id == "ifbench":
+    if task_id in {"ifbench", "ifbench_hard", "ifbench_official"}:
         return "This response ignores the constraint."
     return "unknown"
 
