@@ -9,6 +9,7 @@ from typing import Any
 from ipeo.core.io import read_jsonl
 from ipeo.core.schemas import EvalResult, MethodSelection
 from ipeo.models.base import count_tokens
+from ipeo.stats.split_contract import summary_train_models, summary_validation_models
 
 
 def _mean(values: list[float]) -> float | None:
@@ -90,17 +91,18 @@ def build_method_summary_rows(
 ) -> list[dict[str, Any]]:
     cost_rows = read_jsonl(cost_log_path)
     transfer_by_method = {str(row["method"]): row for row in transfer_rows}
-    source_model_set = set(source_models)
     target_model_set = {target_model}
     rows: list[dict[str, Any]] = []
 
     for selection in selections:
         method = selection.method
         prompt_id = selection.prompt_id
+        train_model_set = summary_train_models(method, source_models, target_model)
+        validation_model_set = summary_validation_models(method, source_models, target_model)
         train_results = [
             row
             for row in pool_results
-            if row.prompt_id == prompt_id and row.model_id in source_model_set and row.split == "val"
+            if row.prompt_id == prompt_id and row.model_id in train_model_set and row.split == "opt"
         ]
         if not train_results:
             train_results = [
@@ -111,7 +113,7 @@ def build_method_summary_rows(
         val_results = [
             row
             for row in pool_results
-            if row.prompt_id == prompt_id and row.model_id == target_model and row.split == "val"
+            if row.prompt_id == prompt_id and row.model_id in validation_model_set and row.split == "val"
         ]
         if not val_results:
             val_results = [
@@ -133,8 +135,8 @@ def build_method_summary_rows(
                     run_id=run_id,
                     task_id=task_id,
                     prompt_id=prompt_id,
-                    phase="evaluation",
-                    model_ids=source_model_set,
+                    phase="baseline_optimization",
+                    model_ids=train_model_set,
                     method="fixed_pool",
                 ),
             ),
@@ -146,8 +148,8 @@ def build_method_summary_rows(
                     run_id=run_id,
                     task_id=task_id,
                     prompt_id=prompt_id,
-                    phase="evaluation",
-                    model_ids=target_model_set,
+                    phase="calibration",
+                    model_ids=validation_model_set,
                     method="fixed_pool",
                 ),
             ),

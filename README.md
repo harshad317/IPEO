@@ -30,6 +30,33 @@ python -m ipeo.runners.run_dry \
 
 Artifacts are written under `artifacts/` as JSONL and CSV files.
 
+## Benchmark Split Contract
+
+IPEO now treats the fixture splits as a strict benchmark contract:
+
+- `opt` is the **train** split for optimization.
+- `val` is the **validation** split for prompt/model selection.
+- `test` is the locked **final target evaluation** split.
+
+The runner writes `stats/split_contract.jsonl`, `stats/data_access.csv`, and
+`stats/*_data_access.jsonl` so every result states which data each method was
+allowed to use. `transfer_regret.csv` also includes columns such as
+`benchmark_track`, `selection_access`, `uses_target_validation`,
+`uses_target_test_for_selection`, `source_train_calls`,
+`source_validation_calls`, `target_validation_calls`, and
+`target_optimization_calls`.
+
+The main comparison tracks are:
+
+- `zero_target_transfer`: IPEO methods use source train data and no target
+  train/validation examples.
+- `source_transfer`: source-selection baselines use source validation data.
+- `target_optimization`: GEPA/MIPROv2 and target-only fixed-pool search use
+  target train/validation data.
+
+No method is allowed to use target test for selection; target test is evaluated
+only after method selection is complete.
+
 ## Live OpenAI Benchmark
 
 Set `OPENAI_API_KEY` first, then run:

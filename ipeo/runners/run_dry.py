@@ -37,6 +37,7 @@ from ipeo.runners.progress import ProgressSettings, RichRunReporter
 from ipeo.stats.ipeo_compare import build_composed_vs_existing_row
 from ipeo.stats.method_summary import aggregate_method_summary_rows, build_method_summary_rows
 from ipeo.stats.regret import build_transfer_rows
+from ipeo.stats.split_contract import access_row, access_rows_by_method
 from ipeo.tasks.adapters import get_tasks
 
 
@@ -105,17 +106,46 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     all_transfer_rows: list[dict[str, object]] = []
     all_comparison_rows: list[dict[str, object]] = []
     all_method_summary_rows: list[dict[str, object]] = []
+    all_access_rows: list[dict[str, object]] = []
 
     write_jsonl(artifact_dir / "stats" / "optional_baselines.jsonl", optional_baseline_statuses())
     write_jsonl(artifact_dir / "stats" / "official_optimizer_records.jsonl", official_optimizer_records())
+    write_jsonl(
+        artifact_dir / "stats" / "split_contract.jsonl",
+        [
+            {
+                "train_split": "opt",
+                "validation_split": "val",
+                "test_split": "test",
+                "rule": "Methods may optimize/select on their declared train/validation access only; target test is final evaluation only.",
+            }
+        ],
+    )
 
     for task in get_tasks(args.tasks):
         reporter.status(f"Task {task.task_id}: building frozen pool")
         pool, edits = build_frozen_pool(task.task_id, num_prompts=args.num_prompts, seed=args.seed, artifact_dir=artifact_dir)
+        train_examples = task.load_split("opt", args.num_examples)
         val_examples = task.load_split("val", args.num_examples)
         test_examples = task.load_split("test", args.num_examples)
 
-        reporter.status(f"Task {task.task_id}: evaluating frozen pool on validation and test splits")
+        reporter.status(f"Task {task.task_id}: evaluating frozen pool on source train and source/target validation splits")
+        pool_train_results = evaluate_pool(
+            run_id=run_id,
+            task=task,
+            models=[model_by_id[model_id] for model_id in source_models],
+            pool=pool,
+            examples=train_examples,
+            cache=cache,
+            cost_ledger=cost_ledger,
+            generation_config=config,
+            method="fixed_pool",
+            fold_id=fold_id,
+            seed=args.seed,
+            phase="baseline_optimization",
+            artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_pool_train.jsonl",
+            show_tqdm=settings.use_tqdm,
+        )
         pool_val_results = evaluate_pool(
             run_id=run_id,
             task=task,
@@ -128,27 +158,11 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             method="fixed_pool",
             fold_id=fold_id,
             seed=args.seed,
-            phase="evaluation",
+            phase="calibration",
             artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_pool_val.jsonl",
             show_tqdm=settings.use_tqdm,
         )
-        pool_test_results = evaluate_pool(
-            run_id=run_id,
-            task=task,
-            models=models,
-            pool=pool,
-            examples=test_examples,
-            cache=cache,
-            cost_ledger=cost_ledger,
-            generation_config=config,
-            method="fixed_pool",
-            fold_id=fold_id,
-            seed=args.seed,
-            phase="final_test",
-            artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_pool_test.jsonl",
-            show_tqdm=settings.use_tqdm,
-        )
-        pool_results = pool_val_results + pool_test_results
+        pool_results = pool_train_results + pool_val_results
 
         reporter.status(f"Task {task.task_id}: estimating invariant edit effects from sources {', '.join(source_models)}")
         invariant_table = estimate_invariant_effects(
@@ -158,7 +172,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             edits=edits,
             eval_results=pool_results,
             config=invariant_config,
-            split="val",
+            split="opt",
             seed=args.seed,
         )
         write_jsonl(artifact_dir / "stats" / f"{task.task_id}_invariant_edits.jsonl", invariant_table)
@@ -287,21 +301,58 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_selected_test.jsonl",
             show_tqdm=settings.use_tqdm,
         )
+        reporter.status(f"Task {task.task_id}: evaluating locked target test oracle for regret reporting")
+        pool_test_results = evaluate_pool(
+            run_id=run_id,
+            task=task,
+            models=[model_by_id[args.fold_target]],
+            pool=pool,
+            examples=test_examples,
+            cache=cache,
+            cost_ledger=cost_ledger,
+            generation_config=config,
+            method="fixed_pool",
+            fold_id=fold_id,
+            seed=args.seed,
+            phase="final_test",
+            artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_pool_test.jsonl",
+            show_tqdm=settings.use_tqdm,
+        )
 
         source_avg = next(selection for selection in selections if selection.method == "source_average")
-        source_eval_calls = len(source_models) * len(pool) * len(val_examples)
+        source_train_calls = len(source_models) * len(pool) * len(train_examples)
+        source_validation_calls = len(source_models) * len(pool) * len(val_examples)
         source_call_methods = {
             "source_average",
             "pooled_source",
             "worst_source_robust",
             "asha_fixed_pool",
+            "promptbridge_emulation",
+        }
+        ipeo_source_call_methods = {
             "ipeo_zero",
             "ipeo_select_existing",
             "ipeo_composed_vs_existing",
         }
-        source_calls_by_method = {method: source_eval_calls for method in source_call_methods}
+        source_calls_by_method = {method: source_validation_calls for method in source_call_methods}
+        source_calls_by_method.update({method: source_train_calls for method in ipeo_source_call_methods})
         for model_id in source_models:
             source_calls_by_method[f"best_source_transfer:{model_id}"] = len(pool) * len(val_examples)
+        target_calls_by_method = {"target_only_bo_fixed_pool": min(8, len(pool)) * len(val_examples), "ipeo_zero": 0}
+        task_access_rows = [
+            access_row(
+                task_id=task.task_id,
+                selection=selection,
+                source_train_calls=source_train_calls,
+                source_validation_calls=source_validation_calls,
+                target_validation_calls=target_calls_by_method.get(selection.method, 0),
+                target_optimization_calls=target_calls_by_method.get(selection.method, selection.target_calls),
+                final_target_test_calls=len(test_examples),
+            )
+            for selection in selections
+        ]
+        write_jsonl(artifact_dir / "stats" / f"{task.task_id}_data_access.jsonl", task_access_rows)
+        all_access_rows.extend(task_access_rows)
         rows = build_transfer_rows(
             task_id=task.task_id,
             fold_id=fold_id,
@@ -313,12 +364,13 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             pool=pool,
             source_average_prompt_id=source_avg.prompt_id,
             source_calls_by_method=source_calls_by_method,
-            target_calls_by_method={"target_only_bo_fixed_pool": min(8, len(pool)) * len(val_examples), "ipeo_zero": 0},
+            target_calls_by_method=target_calls_by_method,
             dollars_by_method={
-                "ipeo_zero": cost_ledger.method_cost("fixed_pool", model_ids=set(source_models)),
-                "ipeo_select_existing": cost_ledger.method_cost("fixed_pool", model_ids=set(source_models)),
-                "ipeo_composed_vs_existing": cost_ledger.method_cost("fixed_pool", model_ids=set(source_models)),
+                "ipeo_zero": cost_ledger.method_cost("fixed_pool", phase="baseline_optimization", model_ids=set(source_models)),
+                "ipeo_select_existing": cost_ledger.method_cost("fixed_pool", phase="baseline_optimization", model_ids=set(source_models)),
+                "ipeo_composed_vs_existing": cost_ledger.method_cost("fixed_pool", phase="baseline_optimization", model_ids=set(source_models)),
             },
+            method_access_by_method=access_rows_by_method(task_access_rows),
         )
         all_transfer_rows.extend(rows)
         method_summary_rows = build_method_summary_rows(
@@ -353,6 +405,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         reporter.summary_table(f"{task.task_id} transfer regret", rows)
 
     write_csv(artifact_dir / "stats" / "transfer_regret.csv", all_transfer_rows)
+    write_csv(artifact_dir / "stats" / "data_access.csv", all_access_rows)
     write_csv(artifact_dir / "stats" / "ipeo_composed_vs_existing.csv", all_comparison_rows)
     write_csv(artifact_dir / "stats" / "method_summary.csv", all_method_summary_rows)
     reporter.method_summary_panels(aggregate_method_summary_rows(all_method_summary_rows))

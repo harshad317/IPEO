@@ -36,6 +36,9 @@ def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     assert (artifact_dir / "edits" / "gsm8k_edits.jsonl").exists()
     assert (artifact_dir / "eval_results" / "gsm8k_pool_val.jsonl").exists()
     assert (artifact_dir / "stats" / "transfer_regret.csv").exists()
+    assert (artifact_dir / "stats" / "data_access.csv").exists()
+    assert (artifact_dir / "stats" / "split_contract.jsonl").exists()
+    assert (artifact_dir / "stats" / "gsm8k_data_access.jsonl").exists()
     assert (artifact_dir / "stats" / "ipeo_composed_vs_existing.csv").exists()
     assert (artifact_dir / "stats" / "method_summary.csv").exists()
     assert (artifact_dir / "stats" / "gsm8k_ipeo_composed_vs_existing.jsonl").exists()
@@ -44,6 +47,14 @@ def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     assert any(row["method"] == "ipeo_zero" for row in rows)
     assert any(row["method"] == "ipeo_select_existing" for row in rows)
     assert any(row["method"] == "ipeo_composed_vs_existing" for row in rows)
+    assert all(row["uses_target_test_for_selection"] is False for row in rows)
+    assert {row["benchmark_track"] for row in rows} >= {"zero_target_transfer", "target_optimization"}
+    access_rows = read_jsonl(artifact_dir / "stats" / "gsm8k_data_access.jsonl")
+    ipeo_access = next(row for row in access_rows if row["method"] == "ipeo_zero")
+    assert ipeo_access["train_access"] == "source_train"
+    assert ipeo_access["uses_target_validation"] is False
+    target_bo_access = next(row for row in access_rows if row["method"] == "target_only_bo_fixed_pool")
+    assert target_bo_access["validation_access"] == "target_validation"
     method_summary = (artifact_dir / "stats" / "method_summary.csv").read_text(encoding="utf-8")
     assert "optimization" in method_summary
     assert "test" in method_summary
