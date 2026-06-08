@@ -25,13 +25,25 @@ from ipeo.methods.fixed_pool import (
     source_average_selection,
     target_only_bo_selection,
 )
-from ipeo.methods.ipeo_zero import select_zero_target_prompt
+from ipeo.methods.ipeo_zero import (
+    select_composed_vs_existing_prompt,
+    select_existing_prompt_by_invariant_score,
+    select_zero_target_prompt,
+)
 from ipeo.models.openai_adapter import build_openai_environments
 from ipeo.prompts.pool_builder import build_frozen_pool
 from ipeo.runners.progress import ProgressSettings, RichRunReporter
+from ipeo.stats.ipeo_compare import build_composed_vs_existing_row
 from ipeo.stats.regret import build_transfer_rows
 from ipeo.tasks.adapters import get_tasks
 
+IPEO_COMPOSED_METHODS = {
+    "ipeo_zero",
+    "ipeo_no_generic",
+    "ipeo_no_cost",
+    "ipeo_no_generic_no_cost",
+}
+IPEO_METHODS = IPEO_COMPOSED_METHODS | {"ipeo_select_existing", "ipeo_composed_vs_existing"}
 FIXED_POOL_METHODS = {
     "original",
     "source_average",
@@ -46,6 +58,8 @@ FIXED_POOL_METHODS = {
     "ipeo_no_generic",
     "ipeo_no_cost",
     "ipeo_no_generic_no_cost",
+    "ipeo_select_existing",
+    "ipeo_composed_vs_existing",
 }
 OFFICIAL_METHOD_ALIASES = {
     "gepa": "gepa",
@@ -153,6 +167,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     cost_ledger = CostLedger(args.cost_log)
     invariant_config = InvariantScorerConfig(n_bootstrap=20)
     all_transfer_rows: list[dict[str, object]] = []
+    all_comparison_rows: list[dict[str, object]] = []
 
     write_jsonl(artifact_dir / "stats" / "optional_baselines.jsonl", optional_baseline_statuses())
     official_records = [record for record in official_optimizer_records() if record.name in official_methods]
@@ -207,7 +222,11 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
 
         selections: list[MethodSelection] = []
         ipeo_prompts: list[PromptCandidate] = []
-        ipeo_methods = fixed_methods & {"ipeo_zero", "ipeo_no_generic", "ipeo_no_cost", "ipeo_no_generic_no_cost"}
+        invariant_table = []
+        ipeo_composed_prompts: dict[str, PromptCandidate] = {}
+        ipeo_existing_selection: MethodSelection | None = None
+        ipeo_comparison_selection: MethodSelection | None = None
+        ipeo_methods = fixed_methods & IPEO_METHODS
         if ipeo_methods:
             reporter.status(f"Task {task.task_id}: estimating invariant edit effects from {args.model} source environments")
             invariant_table = estimate_invariant_effects(
@@ -227,7 +246,10 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 "ipeo_no_cost": {"exclude_generic": False, "exclude_edit_types": {"cost_reduction"}},
                 "ipeo_no_generic_no_cost": {"exclude_generic": True, "exclude_edit_types": {"cost_reduction"}},
             }
-            for method_name in sorted(ipeo_methods):
+            composed_methods_to_build = set(fixed_methods & IPEO_COMPOSED_METHODS)
+            if "ipeo_composed_vs_existing" in fixed_methods:
+                composed_methods_to_build.add("ipeo_zero")
+            for method_name in sorted(composed_methods_to_build):
                 variant = ipeo_variant_configs[method_name]
                 ipeo_prompt, ipeo_selection = select_zero_target_prompt(
                     task_id=task.task_id,
@@ -245,7 +267,32 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     method_name=method_name,
                 )
                 ipeo_prompts.append(ipeo_prompt)
-                selections.append(ipeo_selection)
+                ipeo_composed_prompts[method_name] = ipeo_prompt
+                if method_name in fixed_methods:
+                    selections.append(ipeo_selection)
+            if fixed_methods & {"ipeo_select_existing", "ipeo_composed_vs_existing"}:
+                ipeo_existing_selection = select_existing_prompt_by_invariant_score(
+                    task_id=task.task_id,
+                    pool=pool,
+                    invariant_table=invariant_table,
+                    fold_id=fold_id,
+                    target_model=fold_target,
+                    source_models=source_models,
+                )
+                if "ipeo_select_existing" in fixed_methods:
+                    selections.append(ipeo_existing_selection)
+            if "ipeo_composed_vs_existing" in fixed_methods and ipeo_existing_selection is not None:
+                ipeo_comparison_selection = select_composed_vs_existing_prompt(
+                    task_id=task.task_id,
+                    composed_prompt=ipeo_composed_prompts["ipeo_zero"],
+                    existing_selection=ipeo_existing_selection,
+                    pool=pool,
+                    invariant_table=invariant_table,
+                    fold_id=fold_id,
+                    target_model=fold_target,
+                    source_models=source_models,
+                )
+                selections.append(ipeo_comparison_selection)
 
         if "original" in fixed_methods:
             selections.append(original_prompt(task_id=task.task_id, fold_id=fold_id, target_model=fold_target, source_models=source_models, pool=pool))
@@ -267,8 +314,10 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             selections.extend(best_source_transfer(task_id=task.task_id, fold_id=fold_id, target_model=fold_target, source_models=source_models, pool=pool, eval_results=pool_results))
 
         write_jsonl(artifact_dir / "stats" / f"{task.task_id}_method_selections.jsonl", selections)
-        prompt_pool = pool + ipeo_prompts
+        comparison_prompts = list(ipeo_composed_prompts.values()) if "ipeo_composed_vs_existing" in fixed_methods else []
+        prompt_pool = pool + ipeo_prompts + comparison_prompts
         final_prompts = _dedupe_prompts([_selection_to_prompt(selection, prompt_pool) for selection in selections])
+        final_prompts = _dedupe_prompts(final_prompts + comparison_prompts)
         reporter.status(f"Task {task.task_id}: evaluating selected methods on target {args.model} environment")
         final_results = evaluate_pool(
             run_id=run_id,
@@ -326,6 +375,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 "ipeo_no_generic_no_cost",
             }
         }
+        source_calls_by_method.update({method: source_eval_calls for method in {"ipeo_select_existing", "ipeo_composed_vs_existing"}})
         dollars_by_method = {
             method: source_eval_cost
             for method in {
@@ -337,6 +387,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 "ipeo_no_generic",
                 "ipeo_no_cost",
                 "ipeo_no_generic_no_cost",
+                "ipeo_select_existing",
+                "ipeo_composed_vs_existing",
             }
         }
         for model_id in source_models:
@@ -367,9 +419,29 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             dollars_by_method=dollars_by_method,
         )
         all_transfer_rows.extend(rows)
+        task_comparison_rows: list[dict[str, object]] = []
+        if invariant_table and ipeo_existing_selection is not None and "ipeo_zero" in ipeo_composed_prompts:
+            existing_prompt = next(prompt for prompt in pool if prompt.prompt_id == ipeo_existing_selection.prompt_id)
+            task_comparison_rows.append(
+                build_composed_vs_existing_row(
+                    task_id=task.task_id,
+                    fold_id=fold_id,
+                    target_model=fold_target,
+                    composed_method="ipeo_zero",
+                    composed_prompt=ipeo_composed_prompts["ipeo_zero"],
+                    existing_selection=ipeo_existing_selection,
+                    existing_prompt=existing_prompt,
+                    comparison_selection=ipeo_comparison_selection,
+                    invariant_table=invariant_table,
+                    eval_results=final_results + pool_test_results,
+                )
+            )
+            write_jsonl(artifact_dir / "stats" / f"{task.task_id}_ipeo_composed_vs_existing.jsonl", task_comparison_rows)
+            all_comparison_rows.extend(task_comparison_rows)
         reporter.summary_table(f"{task.task_id} transfer regret", rows)
 
     write_csv(artifact_dir / "stats" / "transfer_regret.csv", all_transfer_rows)
+    write_csv(artifact_dir / "stats" / "ipeo_composed_vs_existing.csv", all_comparison_rows)
     invariant_rows = []
     for path in sorted((artifact_dir / "stats").glob("*_invariant_edits.jsonl")):
         from ipeo.core.io import read_jsonl

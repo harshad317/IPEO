@@ -8,6 +8,15 @@ from ipeo.models.base import count_tokens
 from ipeo.prompts.composer import compose_text, has_conflict
 
 
+def invariant_score_by_edit_id(invariant_table: list[InvariantEditStats]) -> dict[str, float]:
+    return {row.edit_id: row.ipeo_score for row in invariant_table}
+
+
+def prompt_invariant_score(prompt: PromptCandidate, invariant_table: list[InvariantEditStats]) -> float:
+    edit_scores = invariant_score_by_edit_id(invariant_table)
+    return sum(edit_scores.get(edit_id, 0.0) for edit_id in prompt.edit_ids)
+
+
 def select_zero_target_prompt(
     *,
     task_id: str,
@@ -81,3 +90,65 @@ def select_zero_target_prompt(
         selected_edit_ids=edit_ids,
     )
     return prompt, selection
+
+
+def select_existing_prompt_by_invariant_score(
+    *,
+    task_id: str,
+    pool: list[PromptCandidate],
+    invariant_table: list[InvariantEditStats],
+    fold_id: str,
+    target_model: str,
+    source_models: list[str],
+    method_name: str = "ipeo_select_existing",
+) -> MethodSelection:
+    best_prompt = max(
+        pool,
+        key=lambda prompt: (
+            prompt_invariant_score(prompt, invariant_table),
+            -count_tokens(prompt.text),
+            prompt.prompt_id,
+        ),
+    )
+    return MethodSelection(
+        method=method_name,
+        task_id=task_id,
+        fold_id=fold_id,
+        target_model=target_model,
+        source_models=source_models,
+        prompt_id=best_prompt.prompt_id,
+        prompt_text=best_prompt.text,
+        selected_edit_ids=best_prompt.edit_ids,
+    )
+
+
+def select_composed_vs_existing_prompt(
+    *,
+    task_id: str,
+    composed_prompt: PromptCandidate,
+    existing_selection: MethodSelection,
+    pool: list[PromptCandidate],
+    invariant_table: list[InvariantEditStats],
+    fold_id: str,
+    target_model: str,
+    source_models: list[str],
+    method_name: str = "ipeo_composed_vs_existing",
+) -> MethodSelection:
+    prompt_by_id = {prompt.prompt_id: prompt for prompt in pool}
+    existing_prompt = prompt_by_id[existing_selection.prompt_id]
+    composed_score = prompt_invariant_score(composed_prompt, invariant_table)
+    existing_score = prompt_invariant_score(existing_prompt, invariant_table)
+    if existing_score >= composed_score:
+        chosen = existing_prompt
+    else:
+        chosen = composed_prompt
+    return MethodSelection(
+        method=method_name,
+        task_id=task_id,
+        fold_id=fold_id,
+        target_model=target_model,
+        source_models=source_models,
+        prompt_id=chosen.prompt_id,
+        prompt_text=chosen.text,
+        selected_edit_ids=chosen.edit_ids,
+    )

@@ -26,10 +26,15 @@ from ipeo.methods.fixed_pool import (
     source_average_selection,
     target_only_bo_selection,
 )
-from ipeo.methods.ipeo_zero import select_zero_target_prompt
+from ipeo.methods.ipeo_zero import (
+    select_composed_vs_existing_prompt,
+    select_existing_prompt_by_invariant_score,
+    select_zero_target_prompt,
+)
 from ipeo.models.mock import get_models
 from ipeo.prompts.pool_builder import build_frozen_pool
 from ipeo.runners.progress import ProgressSettings, RichRunReporter
+from ipeo.stats.ipeo_compare import build_composed_vs_existing_row
 from ipeo.stats.regret import build_transfer_rows
 from ipeo.tasks.adapters import get_tasks
 
@@ -97,6 +102,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     config = GenerationConfig(temperature=0.0, max_tokens=64)
     invariant_config = InvariantScorerConfig(n_bootstrap=20)
     all_transfer_rows: list[dict[str, object]] = []
+    all_comparison_rows: list[dict[str, object]] = []
 
     write_jsonl(artifact_dir / "stats" / "optional_baselines.jsonl", optional_baseline_statuses())
     write_jsonl(artifact_dir / "stats" / "official_optimizer_records.jsonl", official_optimizer_records())
@@ -167,6 +173,24 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             min_sign_agreement=invariant_config.min_sign_agreement,
             min_lcb=-0.05,
         )
+        ipeo_existing_selection = select_existing_prompt_by_invariant_score(
+            task_id=task.task_id,
+            pool=pool,
+            invariant_table=invariant_table,
+            fold_id=fold_id,
+            target_model=args.fold_target,
+            source_models=source_models,
+        )
+        ipeo_comparison_selection = select_composed_vs_existing_prompt(
+            task_id=task.task_id,
+            composed_prompt=ipeo_prompt,
+            existing_selection=ipeo_existing_selection,
+            pool=pool,
+            invariant_table=invariant_table,
+            fold_id=fold_id,
+            target_model=args.fold_target,
+            source_models=source_models,
+        )
 
         selections = [
             original_prompt(task_id=task.task_id, fold_id=fold_id, target_model=args.fold_target, source_models=source_models, pool=pool),
@@ -228,6 +252,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 eval_results=pool_results,
             ),
             ipeo_selection,
+            ipeo_existing_selection,
+            ipeo_comparison_selection,
         ]
         selections.extend(
             best_source_transfer(
@@ -268,6 +294,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             "worst_source_robust",
             "asha_fixed_pool",
             "ipeo_zero",
+            "ipeo_select_existing",
+            "ipeo_composed_vs_existing",
         }
         source_calls_by_method = {method: source_eval_calls for method in source_call_methods}
         for model_id in source_models:
@@ -284,12 +312,34 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             source_average_prompt_id=source_avg.prompt_id,
             source_calls_by_method=source_calls_by_method,
             target_calls_by_method={"target_only_bo_fixed_pool": min(8, len(pool)) * len(val_examples), "ipeo_zero": 0},
-            dollars_by_method={"ipeo_zero": cost_ledger.method_cost("fixed_pool", model_ids=set(source_models))},
+            dollars_by_method={
+                "ipeo_zero": cost_ledger.method_cost("fixed_pool", model_ids=set(source_models)),
+                "ipeo_select_existing": cost_ledger.method_cost("fixed_pool", model_ids=set(source_models)),
+                "ipeo_composed_vs_existing": cost_ledger.method_cost("fixed_pool", model_ids=set(source_models)),
+            },
         )
         all_transfer_rows.extend(rows)
+        existing_prompt = next(prompt for prompt in pool if prompt.prompt_id == ipeo_existing_selection.prompt_id)
+        comparison_rows = [
+            build_composed_vs_existing_row(
+                task_id=task.task_id,
+                fold_id=fold_id,
+                target_model=args.fold_target,
+                composed_method="ipeo_zero",
+                composed_prompt=ipeo_prompt,
+                existing_selection=ipeo_existing_selection,
+                existing_prompt=existing_prompt,
+                comparison_selection=ipeo_comparison_selection,
+                invariant_table=invariant_table,
+                eval_results=final_results + pool_test_results,
+            )
+        ]
+        write_jsonl(artifact_dir / "stats" / f"{task.task_id}_ipeo_composed_vs_existing.jsonl", comparison_rows)
+        all_comparison_rows.extend(comparison_rows)
         reporter.summary_table(f"{task.task_id} transfer regret", rows)
 
     write_csv(artifact_dir / "stats" / "transfer_regret.csv", all_transfer_rows)
+    write_csv(artifact_dir / "stats" / "ipeo_composed_vs_existing.csv", all_comparison_rows)
     invariant_rows = []
     for path in sorted((artifact_dir / "stats").glob("*_invariant_edits.jsonl")):
         from ipeo.core.io import read_jsonl

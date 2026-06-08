@@ -54,8 +54,16 @@ records requested official optimizer status for GEPA, MIPROv2, and CAPO.
 Useful IPEO ablations:
 
 ```bash
---methods ipeo_zero ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
+--methods ipeo_zero ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
 ```
+
+`ipeo_select_existing` scores each frozen-pool prompt by the sum of invariant
+scores for its edit vector and selects the best existing prompt.
+`ipeo_composed_vs_existing` compares the zero-target composed prompt with that
+existing-prompt selector without target leakage, then writes
+`stats/*_ipeo_composed_vs_existing.jsonl` and
+`stats/ipeo_composed_vs_existing.csv` to report which side actually won on the
+held-out target test split.
 
 Official optimizer records are status-only until the runner invokes the actual
 external optimizer package. Installed-but-not-run optimizers are marked
@@ -73,7 +81,7 @@ python -m ipeo.runners.run_openai \
   --model gpt-4.1-mini \
   --num_prompts 20 \
   --num_examples 24 \
-  --methods ipeo_no_generic_no_cost source_average pooled_source worst_source_robust asha_fixed_pool best_source_transfer \
+  --methods ipeo_no_generic_no_cost ipeo_select_existing ipeo_composed_vs_existing source_average pooled_source worst_source_robust asha_fixed_pool best_source_transfer \
   --workers 8 \
   --timeout_seconds 300 \
   --max_retries 6 \
@@ -98,7 +106,7 @@ python -m ipeo.runners.run_openai \
   --model gpt-4.1-mini \
   --num_prompts 20 \
   --num_examples 24 \
-  --methods ipeo_no_generic_no_cost source_average pooled_source worst_source_robust asha_fixed_pool best_source_transfer \
+  --methods ipeo_no_generic_no_cost ipeo_select_existing ipeo_composed_vs_existing source_average pooled_source worst_source_robust asha_fixed_pool best_source_transfer \
   --workers 8 \
   --timeout_seconds 300 \
   --max_retries 6 \

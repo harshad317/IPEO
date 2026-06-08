@@ -17,6 +17,7 @@ def test_normalize_methods_all_expands() -> None:
     fixed, official = normalize_methods(["all"])
     assert "ipeo_zero" in fixed
     assert {"ipeo_no_generic", "ipeo_no_cost", "ipeo_no_generic_no_cost"} <= fixed
+    assert {"ipeo_select_existing", "ipeo_composed_vs_existing"} <= fixed
     assert {"gepa", "miprov2", "capo"} <= official
 
 

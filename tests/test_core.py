@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 
 from ipeo.core.ids import stable_hash
-from ipeo.core.schemas import GenerationConfig
+from ipeo.core.schemas import GenerationConfig, InvariantEditStats
 from ipeo.evaluation.cache import ResponseCache, make_cache_key
 from ipeo.evaluation.cost_ledger import CostLedger
 from ipeo.evaluation.evaluator import evaluate_pool
+from ipeo.methods.ipeo_zero import prompt_invariant_score, select_existing_prompt_by_invariant_score
 from ipeo.models.mock import get_mock_model
 from ipeo.prompts.pool_builder import build_frozen_pool
 from ipeo.tasks.adapters import get_task
@@ -127,6 +128,40 @@ def test_instruction_following_strict(inp, prompt_to_response):
     assert task.score(task.parse_output("OK"), example.gold) == 1.0
     assert task.score(task.parse_output("NO"), example.gold) == 0.0
     _load_official_eval_lib.cache_clear()
+
+
+def test_invariant_existing_prompt_selector_scores_edit_vectors(tmp_path: Path) -> None:
+    pool, edits = build_frozen_pool("gsm8k", num_prompts=12, artifact_dir=tmp_path)
+    invariant_rows = [
+        InvariantEditStats(
+            task_id="gsm8k",
+            edit_id=edit.edit_id,
+            edit_type=edit.edit_type,
+            token_delta=edit.estimated_token_delta,
+            mean_effect=0.0,
+            effect_variance=0.0,
+            sign_agreement=1.0,
+            rank_stability=1.0,
+            lcb_mean_effect=0.0,
+            ipeo_score=float(idx + 1),
+            is_generic=edit.is_generic,
+            is_placebo=edit.is_placebo,
+            per_model_effects={"source": float(idx + 1)},
+        )
+        for idx, edit in enumerate(edits)
+    ]
+    selection = select_existing_prompt_by_invariant_score(
+        task_id="gsm8k",
+        pool=pool,
+        invariant_table=invariant_rows,
+        fold_id="fold",
+        target_model="target",
+        source_models=["source"],
+    )
+    best_score = max(prompt_invariant_score(prompt, invariant_rows) for prompt in pool)
+    selected_prompt = next(prompt for prompt in pool if prompt.prompt_id == selection.prompt_id)
+    assert selection.method == "ipeo_select_existing"
+    assert prompt_invariant_score(selected_prompt, invariant_rows) == best_score
 
 
 def test_cost_ledger_aggregates(tmp_path: Path) -> None:
