@@ -14,6 +14,7 @@ from ipeo.core.io import ensure_parent, write_jsonl
 from ipeo.core.schemas import EvalResult, Example, GenerationConfig, MethodSelection
 from ipeo.models.base import count_tokens
 from ipeo.models.openai_adapter import GPT_41_MINI_INPUT_PER_1K, GPT_41_MINI_OUTPUT_PER_1K
+from ipeo.prompts.seed_prompts import seed_prompt_texts
 from ipeo.tasks.base import TaskAdapter
 
 
@@ -25,10 +26,11 @@ class DspyOptimizerConfig:
     source_models: list[str]
     seed: int = 0
     auto: str | None = "light"
+    program: str = "auto"
     train_examples: int = 16
     val_examples: int = 16
-    max_bootstrapped_demos: int = 0
-    max_labeled_demos: int = 0
+    max_bootstrapped_demos: int = 4
+    max_labeled_demos: int = 4
     max_metric_calls: int | None = None
     num_threads: int = 1
     temperature: float = 0.0
@@ -98,8 +100,8 @@ def run_dspy_optimizer(
     lm = _build_lm(dspy, config)
     previous_lm = getattr(getattr(dspy, "settings", None), "lm", None)
     dspy.configure(lm=lm)
-    program = dspy.Predict("question -> answer")
-    metric = _build_metric(task)
+    program = _build_program(dspy, task, config)
+    metric = _build_metric(dspy, task, feedback_mode=normalized_method == "gepa")
     history_start = _history_len(lm)
     status_path = Path(artifact_dir) / "stats" / f"{task.task_id}_{normalized_method}_dspy_status.jsonl"
 
@@ -232,6 +234,34 @@ def _build_lm(dspy: Any, config: DspyOptimizerConfig) -> Any:
     return dspy.LM(f"openai/{config.api_model}", **kwargs)
 
 
+def _build_program(dspy: Any, task: TaskAdapter, config: DspyOptimizerConfig) -> Any:
+    signature = dspy.Signature(
+        "question -> answer",
+        instructions=_task_instruction(task),
+    )
+    program_type = config.program
+    if program_type == "auto":
+        program_type = "cot" if task.task_id in {"gsm8k", "bbh"} else "predict"
+    if program_type == "cot":
+        return dspy.ChainOfThought(signature)
+    return dspy.Predict(signature)
+
+
+def _task_instruction(task: TaskAdapter) -> str:
+    seeds = seed_prompt_texts(task.task_id)
+    task_seed = seeds[-1] if seeds else "Solve the task carefully."
+    output_desc = {
+        "gsm8k": "Return the final numeric answer in the answer field.",
+        "bbh": "Return only the final answer in the answer field.",
+        "classification": "Return exactly one label: sports, business, science, or world.",
+        "extraction_qa": "Return the shortest answer span supported by the context.",
+        "ifbench": "Return only the final response that satisfies every visible instruction-following constraint.",
+        "ifbench_hard": "Return only the final response after satisfying every hard formatting, count, JSON, CSV, suffix, and forbidden-token constraint.",
+        "ifbench_official": "Return only the final response after satisfying every visible instruction-following constraint.",
+    }.get(task.task_id, "Return only the final answer.")
+    return f"{task_seed}\n\n{output_desc}"
+
+
 def _compile_optimizer(
     *,
     dspy: Any,
@@ -268,12 +298,16 @@ def _compile_optimizer(
         prompt_model=lm,
         auto=config.auto,
         num_threads=max(1, int(config.num_threads)),
-        max_bootstrapped_demos=config.max_bootstrapped_demos,
-        max_labeled_demos=config.max_labeled_demos,
         seed=config.seed,
         log_dir=str(log_dir),
     )
-    return optimizer.compile(program, trainset=trainset, valset=valset)
+    return optimizer.compile(
+        program,
+        trainset=trainset,
+        valset=valset,
+        max_bootstrapped_demos=config.max_bootstrapped_demos,
+        max_labeled_demos=config.max_labeled_demos,
+    )
 
 
 def _to_dspy_examples(dspy: Any, task: TaskAdapter, examples: list[Example]) -> list[Any]:
@@ -290,15 +324,15 @@ def _to_dspy_examples(dspy: Any, task: TaskAdapter, examples: list[Example]) -> 
     return rows
 
 
-def _build_metric(task: TaskAdapter) -> Callable[..., Any]:
+def _build_metric(dspy: Any, task: TaskAdapter, *, feedback_mode: bool) -> Callable[..., Any]:
     def metric(gold: Any, pred: Any, trace: Any = None, pred_name: Any = None, pred_trace: Any = None) -> Any:
         raw_answer = str(_example_value(pred, "answer", pred))
         gold_value = _example_value(gold, "ipeo_gold", _example_value(gold, "answer", ""))
         parsed = task.parse_output(raw_answer)
         score = float(task.score(parsed, gold_value))
-        if pred_name is not None or pred_trace is not None:
-            feedback = _feedback_for_score(score, raw_answer)
-            return {"score": score, "feedback": feedback}
+        if feedback_mode:
+            feedback = _feedback_for_score(score, raw_answer, gold_value)
+            return dspy.Prediction(score=score, feedback=feedback)
         return score
 
     return metric
@@ -390,12 +424,17 @@ def _example_value(obj: Any, key: str, default: Any = None) -> Any:
         return default
 
 
-def _feedback_for_score(score: float, raw_answer: str) -> str:
+def _feedback_for_score(score: float, raw_answer: str, gold_value: Any) -> str:
     if score >= 1.0:
         return "Correct. Preserve the task format and answer constraints."
     if not raw_answer.strip():
         return "The answer was empty. Produce a concise answer that satisfies the requested format."
-    return "The answer did not satisfy the gold metric. Improve format compliance and final-answer precision."
+    return (
+        "The answer did not satisfy the task metric. "
+        f"Observed answer: {raw_answer[:500]!r}. "
+        f"Gold/validator target: {str(gold_value)[:500]!r}. "
+        "Improve exact final-answer precision and hard format/constraint compliance."
+    )
 
 
 def _history_len(lm: Any) -> int:

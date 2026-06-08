@@ -103,5 +103,6 @@ def test_method_summary_uses_compiled_program_opt_val_test_rows(tmp_path: Path) 
     assert by_split["train"]["score"] == 0.5
     assert by_split["val"]["score"] == 0.75
     assert by_split["test"]["score"] == 1.0
+    assert by_split["test"]["avg_tokens"] is not None
     assert by_split["test"]["api_calls"] == 1
     assert by_split["optimization"]["api_calls"] == 7

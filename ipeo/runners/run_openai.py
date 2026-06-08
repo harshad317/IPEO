@@ -91,11 +91,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout_seconds", type=int, default=240)
     parser.add_argument("--max_retries", type=int, default=5)
     parser.add_argument("--dspy_auto", choices=["light", "medium", "heavy"], default="light")
+    parser.add_argument("--dspy_program", choices=["auto", "predict", "cot"], default="auto")
     parser.add_argument("--dspy_train_examples", type=int, default=16)
     parser.add_argument("--dspy_val_examples", type=int, default=16)
     parser.add_argument("--dspy_max_metric_calls", type=int, default=None)
-    parser.add_argument("--dspy_max_bootstrapped_demos", type=int, default=0)
-    parser.add_argument("--dspy_max_labeled_demos", type=int, default=0)
+    parser.add_argument("--dspy_max_bootstrapped_demos", type=int, default=4)
+    parser.add_argument("--dspy_max_labeled_demos", type=int, default=4)
+    parser.add_argument("--dspy_max_tokens", type=int, default=None)
     return parser.parse_args()
 
 
@@ -332,6 +334,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 source_models=source_models,
                 seed=args.seed,
                 auto=args.dspy_auto,
+                program=args.dspy_program,
                 train_examples=args.dspy_train_examples,
                 val_examples=args.dspy_val_examples,
                 max_bootstrapped_demos=args.dspy_max_bootstrapped_demos,
@@ -339,7 +342,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 max_metric_calls=args.dspy_max_metric_calls,
                 num_threads=args.workers,
                 temperature=args.temperature,
-                max_tokens=generation_config.max_tokens,
+                max_tokens=args.dspy_max_tokens if args.dspy_max_tokens is not None else max(128, generation_config.max_tokens),
                 max_retries=args.max_retries,
             )
             for method_name in sorted(official_methods):

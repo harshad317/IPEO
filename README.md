@@ -80,8 +80,12 @@ python -m ipeo.runners.run_openai \
   --timeout_seconds 300 \
   --max_retries 6 \
   --dspy_auto light \
+  --dspy_program auto \
   --dspy_train_examples 16 \
   --dspy_val_examples 16 \
+  --dspy_max_bootstrapped_demos 4 \
+  --dspy_max_labeled_demos 4 \
+  --dspy_max_tokens 128 \
   --progress both \
   --artifact_dir artifacts/gpt41mini_dspy_methods \
   --cache_dir artifacts/gpt41mini_dspy_methods/cache \
@@ -90,7 +94,8 @@ python -m ipeo.runners.run_openai \
 
 Use `--dspy_auto medium` or `--dspy_auto heavy` only when you are ready to
 spend more optimizer calls. `--dspy_max_metric_calls N` caps GEPA with an
-explicit metric-call budget.
+explicit metric-call budget. `--dspy_program auto` uses Chain-of-Thought for
+math/reasoning tasks and direct prediction for strict-format tasks.
 
 ## IFBench Stress Tests
 

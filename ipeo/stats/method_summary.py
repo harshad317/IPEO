@@ -8,6 +8,7 @@ from typing import Any
 
 from ipeo.core.io import read_jsonl
 from ipeo.core.schemas import EvalResult, MethodSelection
+from ipeo.models.base import count_tokens
 
 
 def _mean(values: list[float]) -> float | None:
@@ -60,6 +61,19 @@ def _avg_tokens(rows: list[dict[str, Any]]) -> float | None:
 
 def _api_calls(rows: list[dict[str, Any]]) -> int:
     return sum(1 for row in rows if not row.get("cache_hit", False))
+
+
+def _fallback_avg_tokens(prompt_text: str, results: list[EvalResult]) -> float | None:
+    if not results:
+        return None
+    prompt_tokens = count_tokens(prompt_text)
+    values = []
+    for row in results:
+        raw = row.parsed_output.get("raw")
+        if raw is None:
+            raw = row.parsed_output.get("answer", "")
+        values.append(prompt_tokens + count_tokens(str(raw)))
+    return _mean(values)
 
 
 def build_method_summary_rows(
@@ -153,6 +167,9 @@ def build_method_summary_rows(
         ]
         for split, split_results, split_cost_rows in split_specs:
             score, stddev = _score_stats(split_results)
+            avg_tokens = _avg_tokens(split_cost_rows)
+            if avg_tokens is None and split_results:
+                avg_tokens = _fallback_avg_tokens(selection.prompt_text, split_results)
             api_calls = _api_calls(split_cost_rows)
             if not split_cost_rows and split_results:
                 api_calls = len(split_results)
@@ -163,7 +180,7 @@ def build_method_summary_rows(
                     "split": split,
                     "score": score,
                     "stddev": stddev,
-                    "avg_tokens": _avg_tokens(split_cost_rows),
+                    "avg_tokens": avg_tokens,
                     "api_calls": api_calls,
                 }
             )
