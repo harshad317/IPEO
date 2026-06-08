@@ -12,7 +12,7 @@ from ipeo.models.base import count_tokens
 
 
 FAMILY_WEIGHTS: dict[str, dict[str, float]] = {
-    "mock_openai": {
+    "mock_openai_a": {
         "output_format": 0.13,
         "reasoning_strategy": 0.12,
         "verification": 0.09,
@@ -23,7 +23,7 @@ FAMILY_WEIGHTS: dict[str, dict[str, float]] = {
         "generic_hygiene": 0.03,
         "placebo": 0.0,
     },
-    "mock_anthropic": {
+    "mock_openai_b": {
         "output_format": 0.10,
         "reasoning_strategy": 0.08,
         "verification": 0.11,
@@ -34,7 +34,7 @@ FAMILY_WEIGHTS: dict[str, dict[str, float]] = {
         "generic_hygiene": 0.03,
         "placebo": 0.0,
     },
-    "mock_google": {
+    "mock_openai_c": {
         "output_format": 0.11,
         "reasoning_strategy": 0.10,
         "verification": 0.08,
@@ -45,7 +45,7 @@ FAMILY_WEIGHTS: dict[str, dict[str, float]] = {
         "generic_hygiene": 0.02,
         "placebo": 0.0,
     },
-    "mock_llama": {
+    "mock_openai_d": {
         "output_format": 0.09,
         "reasoning_strategy": 0.11,
         "verification": 0.10,
@@ -185,13 +185,13 @@ class MockModelAdapter:
 
 def get_mock_model(model_id: str) -> MockModelAdapter:
     providers = {
-        "mock_openai": "openai_family",
-        "mock_anthropic": "anthropic_family",
-        "mock_google": "google_family",
-        "mock_llama": "open_or_local_family",
+        "mock_openai_a": "openai_family",
+        "mock_openai_b": "openai_family",
+        "mock_openai_c": "openai_family",
+        "mock_openai_d": "openai_family",
     }
     if model_id not in providers:
-        raise ValueError(f"Unknown mock model: {model_id}")
+        raise ValueError(f"Unknown OpenAI mock model: {model_id}")
     return MockModelAdapter(model_id=model_id, provider=providers[model_id], version=f"{model_id}-2026-06-08")
 
 

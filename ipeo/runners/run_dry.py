@@ -37,10 +37,10 @@ from ipeo.tasks.adapters import get_tasks
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run deterministic IPEO MVP dry run")
     parser.add_argument("--tasks", nargs="+", default=["gsm8k"])
-    parser.add_argument("--models", nargs="+", default=["mock_openai", "mock_anthropic", "mock_google", "mock_llama"])
+    parser.add_argument("--models", nargs="+", default=["mock_openai_a", "mock_openai_b", "mock_openai_c", "mock_openai_d"])
     parser.add_argument("--num_prompts", type=int, default=20)
     parser.add_argument("--num_examples", type=int, default=24)
-    parser.add_argument("--fold_target", default="mock_llama")
+    parser.add_argument("--fold_target", default="mock_openai_d")
     parser.add_argument("--cache_dir", default="artifacts/cache")
     parser.add_argument("--cost_log", default="artifacts/costs/dry_run.jsonl")
     parser.add_argument("--artifact_dir", default="artifacts")

@@ -17,10 +17,10 @@ def test_optional_baseline_statuses_are_explicit() -> None:
 def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     args = argparse.Namespace(
         tasks=["gsm8k"],
-        models=["mock_openai", "mock_anthropic", "mock_google", "mock_llama"],
+        models=["mock_openai_a", "mock_openai_b", "mock_openai_c", "mock_openai_d"],
         num_prompts=8,
         num_examples=4,
-        fold_target="mock_llama",
+        fold_target="mock_openai_d",
         cache_dir=str(tmp_path / "cache"),
         cost_log=str(tmp_path / "artifacts" / "costs" / "dry_run.jsonl"),
         artifact_dir=str(tmp_path / "artifacts"),

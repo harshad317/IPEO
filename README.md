@@ -9,10 +9,10 @@ environments. The default dry run is deterministic and requires no API keys.
 python -m pytest
 python -m ipeo.runners.run_dry \
   --tasks gsm8k \
-  --models mock_openai mock_anthropic mock_google mock_llama \
+  --models mock_openai_a mock_openai_b mock_openai_c mock_openai_d \
   --num_prompts 8 \
   --num_examples 8 \
-  --fold_target mock_llama
+  --fold_target mock_openai_d
 ```
 
 ## Full Offline Dry Run
@@ -20,10 +20,10 @@ python -m ipeo.runners.run_dry \
 ```bash
 python -m ipeo.runners.run_dry \
   --tasks gsm8k bbh classification extraction_qa \
-  --models mock_openai mock_anthropic mock_google mock_llama \
+  --models mock_openai_a mock_openai_b mock_openai_c mock_openai_d \
   --num_prompts 20 \
   --num_examples 24 \
-  --fold_target mock_llama \
+  --fold_target mock_openai_d \
   --cache_dir artifacts/cache \
   --cost_log artifacts/costs/dry_run.jsonl
 ```

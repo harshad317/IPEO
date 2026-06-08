@@ -22,7 +22,7 @@ def test_cache_key_changes_with_prompt_and_generation_config(tmp_path: Path) -> 
     pool, _ = build_frozen_pool("gsm8k", num_prompts=2, artifact_dir=tmp_path)
     task = get_task("gsm8k")
     example = task.load_split("val", 1)[0]
-    model = get_mock_model("mock_openai")
+    model = get_mock_model("mock_openai_a")
     key_a = make_cache_key(model, pool[0], example, GenerationConfig(max_tokens=16))
     key_b = make_cache_key(model, pool[1], example, GenerationConfig(max_tokens=16))
     key_c = make_cache_key(model, pool[0], example, GenerationConfig(max_tokens=32))
@@ -41,7 +41,7 @@ def test_task_parsers_and_metrics() -> None:
 
 def test_cost_ledger_aggregates(tmp_path: Path) -> None:
     ledger = CostLedger(tmp_path / "costs.jsonl")
-    model = get_mock_model("mock_openai")
+    model = get_mock_model("mock_openai_a")
     pool, _ = build_frozen_pool("gsm8k", num_prompts=1, artifact_dir=tmp_path)
     response = model.generate(pool[0].text, "Maya buys 2 packs with 3 stickers each, then finds 1 more.", GenerationConfig())
     ledger.log(
