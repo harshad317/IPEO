@@ -1,0 +1,316 @@
+"""Post-run benchmark analysis from transfer-regret artifacts."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+from ipeo.core.io import read_csv, write_csv
+
+FLOAT_FIELDS = {
+    "deployment_cost",
+    "fixed_pool_oracle_score",
+    "fixed_pool_regret",
+    "p_value",
+    "regret_reduction_vs_source_average",
+    "target_score",
+    "total_dollars",
+}
+INT_FIELDS = {
+    "final_target_test_calls",
+    "source_calls",
+    "source_train_calls",
+    "source_validation_calls",
+    "target_calls",
+    "target_optimization_calls",
+    "target_validation_calls",
+}
+BOOL_FIELDS = {"uses_target_test_for_selection", "uses_target_train", "uses_target_validation"}
+DEFAULT_BASELINES = [
+    "miprov2",
+    "gepa",
+    "source_average",
+    "pooled_source",
+    "worst_source_robust",
+    "asha_fixed_pool",
+    "target_only_bo_fixed_pool",
+    "best_source_transfer",
+]
+DEFAULT_IPEO_METHODS = ["ipeo_select_existing", "ipeo_composed_vs_existing", "ipeo_zero"]
+
+
+def analyze_artifact_dir(
+    artifact_dir: str | Path,
+    *,
+    focus_task: str | None = None,
+    ipeo_methods: list[str] | None = None,
+    baseline_methods: list[str] | None = None,
+    best_score_tolerance: float = 1e-9,
+) -> dict[str, list[dict[str, Any]]]:
+    artifact_path = Path(artifact_dir)
+    transfer_path = artifact_path / "stats" / "transfer_regret.csv"
+    rows = load_transfer_rows(transfer_path)
+    if focus_task is not None:
+        rows = [row for row in rows if row.get("task_id") == focus_task]
+    if not rows:
+        raise ValueError(f"No transfer rows found in {transfer_path}")
+
+    ipeo_methods = ipeo_methods or DEFAULT_IPEO_METHODS
+    baseline_methods = baseline_methods or DEFAULT_BASELINES
+    outputs = {
+        "per_task_winners": per_task_winners(rows, best_score_tolerance=best_score_tolerance),
+        "track_summary": track_summary(rows),
+        "method_task_summary": method_task_summary(rows),
+        "ipeo_vs_baselines": ipeo_vs_baselines(rows, ipeo_methods=ipeo_methods, baseline_methods=baseline_methods),
+        "cost_frontier": cost_frontier(rows),
+    }
+    stats_dir = artifact_path / "stats"
+    for name, output_rows in outputs.items():
+        suffix = f"_{focus_task}" if focus_task else ""
+        write_csv(stats_dir / f"analysis_{name}{suffix}.csv", output_rows)
+    return outputs
+
+
+def load_transfer_rows(path: str | Path) -> list[dict[str, Any]]:
+    return [_coerce_row(row) for row in read_csv(path)]
+
+
+def per_task_winners(rows: list[dict[str, Any]], *, best_score_tolerance: float = 1e-9) -> list[dict[str, Any]]:
+    grouped = _group_by(rows, "task_id")
+    outputs: list[dict[str, Any]] = []
+    for task_id, task_rows in sorted(grouped.items()):
+        best_score = max(_float(row, "target_score") for row in task_rows)
+        best_rows = [row for row in task_rows if _float(row, "target_score") >= best_score - best_score_tolerance]
+        cheapest_best = min(best_rows, key=_total_calls_then_dollars)
+        best_ipeo = _best_matching(task_rows, lambda row: str(row.get("method", "")).startswith("ipeo_"))
+        best_target = _best_matching(task_rows, lambda row: row.get("benchmark_track") == "target_optimization")
+        best_source = _best_matching(task_rows, lambda row: row.get("benchmark_track") == "source_transfer")
+        outputs.append(
+            {
+                "task_id": task_id,
+                "best_score": best_score,
+                "best_methods": ",".join(sorted(str(row["method"]) for row in best_rows)),
+                "cheapest_best_method": cheapest_best["method"],
+                "cheapest_best_total_calls": _total_calls(cheapest_best),
+                "cheapest_best_total_dollars": _float(cheapest_best, "total_dollars"),
+                "best_ipeo_method": best_ipeo.get("method") if best_ipeo else "",
+                "best_ipeo_score": _float(best_ipeo, "target_score") if best_ipeo else None,
+                "best_target_optimization_method": best_target.get("method") if best_target else "",
+                "best_target_optimization_score": _float(best_target, "target_score") if best_target else None,
+                "best_source_transfer_method": best_source.get("method") if best_source else "",
+                "best_source_transfer_score": _float(best_source, "target_score") if best_source else None,
+            }
+        )
+    return outputs
+
+
+def track_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = _group_by(rows, "benchmark_track")
+    outputs: list[dict[str, Any]] = []
+    for track, track_rows in sorted(grouped.items()):
+        outputs.append(
+            {
+                "benchmark_track": track,
+                "num_rows": len(track_rows),
+                "mean_target_score": _mean(_float(row, "target_score") for row in track_rows),
+                "mean_fixed_pool_regret": _mean(_float(row, "fixed_pool_regret") for row in track_rows),
+                "mean_total_calls": _mean(_total_calls(row) for row in track_rows),
+                "mean_total_dollars": _mean(_float(row, "total_dollars") for row in track_rows),
+                "best_score": max(_float(row, "target_score") for row in track_rows),
+                "best_method": max(track_rows, key=lambda row: (_float(row, "target_score"), -_total_calls(row)))["method"],
+            }
+        )
+    return outputs
+
+
+def method_task_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    outputs: list[dict[str, Any]] = []
+    for row in sorted(rows, key=lambda item: (str(item.get("task_id", "")), -_float(item, "target_score"), _total_calls(item), str(item.get("method", "")))):
+        outputs.append(
+            {
+                "task_id": row.get("task_id"),
+                "method": row.get("method"),
+                "benchmark_track": row.get("benchmark_track", ""),
+                "target_score": _float(row, "target_score"),
+                "fixed_pool_regret": _float(row, "fixed_pool_regret"),
+                "total_calls": _total_calls(row),
+                "source_calls": _int(row, "source_calls"),
+                "target_calls": _int(row, "target_calls"),
+                "total_dollars": _float(row, "total_dollars"),
+                "selection_access": row.get("selection_access", ""),
+                "uses_target_validation": row.get("uses_target_validation", False),
+                "uses_target_test_for_selection": row.get("uses_target_test_for_selection", False),
+            }
+        )
+    return outputs
+
+
+def ipeo_vs_baselines(
+    rows: list[dict[str, Any]],
+    *,
+    ipeo_methods: list[str],
+    baseline_methods: list[str],
+) -> list[dict[str, Any]]:
+    grouped = _group_by(rows, "task_id")
+    outputs: list[dict[str, Any]] = []
+    for task_id, task_rows in sorted(grouped.items()):
+        for ipeo_method in ipeo_methods:
+            ipeo = next((row for row in task_rows if row.get("method") == ipeo_method), None)
+            if ipeo is None:
+                continue
+            for baseline in _baseline_rows(task_rows, baseline_methods):
+                baseline_method = str(baseline.get("method", ""))
+                score_delta = _float(ipeo, "target_score") - _float(baseline, "target_score")
+                call_delta = _total_calls(ipeo) - _total_calls(baseline)
+                dollar_delta = _float(ipeo, "total_dollars") - _float(baseline, "total_dollars")
+                outputs.append(
+                    {
+                        "task_id": task_id,
+                        "ipeo_method": ipeo_method,
+                        "baseline_method": baseline_method,
+                        "ipeo_score": _float(ipeo, "target_score"),
+                        "baseline_score": _float(baseline, "target_score"),
+                        "score_delta": score_delta,
+                        "ipeo_total_calls": _total_calls(ipeo),
+                        "baseline_total_calls": _total_calls(baseline),
+                        "call_delta": call_delta,
+                        "ipeo_total_dollars": _float(ipeo, "total_dollars"),
+                        "baseline_total_dollars": _float(baseline, "total_dollars"),
+                        "dollar_delta": dollar_delta,
+                        "winner": _winner(score_delta),
+                    }
+                )
+    return outputs
+
+
+def _baseline_rows(rows: list[dict[str, Any]], baseline_methods: list[str]) -> list[dict[str, Any]]:
+    methods = set(baseline_methods)
+    if "all" in methods:
+        return [row for row in rows if not str(row.get("method", "")).startswith("ipeo_")]
+    selected: list[dict[str, Any]] = []
+    for row in rows:
+        method = str(row.get("method", ""))
+        if method in methods:
+            selected.append(row)
+        elif "best_source_transfer" in methods and method.startswith("best_source_transfer:"):
+            selected.append(row)
+    return selected
+
+
+def cost_frontier(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = _group_by(rows, "task_id")
+    outputs: list[dict[str, Any]] = []
+    for task_id, task_rows in sorted(grouped.items()):
+        for row in task_rows:
+            if _is_pareto_efficient(row, task_rows):
+                outputs.append(
+                    {
+                        "task_id": task_id,
+                        "method": row.get("method"),
+                        "benchmark_track": row.get("benchmark_track", ""),
+                        "target_score": _float(row, "target_score"),
+                        "fixed_pool_regret": _float(row, "fixed_pool_regret"),
+                        "total_calls": _total_calls(row),
+                        "total_dollars": _float(row, "total_dollars"),
+                    }
+                )
+    return sorted(outputs, key=lambda item: (str(item["task_id"]), _int(item, "total_calls"), -_float(item, "target_score")))
+
+
+def _coerce_row(row: dict[str, str]) -> dict[str, Any]:
+    out: dict[str, Any] = dict(row)
+    for field in FLOAT_FIELDS:
+        if field in out:
+            out[field] = _parse_float(out[field])
+    for field in INT_FIELDS:
+        if field in out:
+            out[field] = _parse_int(out[field])
+    for field in BOOL_FIELDS:
+        if field in out:
+            out[field] = str(out[field]).strip().lower() == "true"
+    if "benchmark_track" not in out:
+        out["benchmark_track"] = ""
+    return out
+
+
+def _group_by(rows: list[dict[str, Any]], key: str) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.get(key, ""))].append(row)
+    return grouped
+
+
+def _best_matching(rows: list[dict[str, Any]], predicate: Any) -> dict[str, Any] | None:
+    matched = [row for row in rows if predicate(row)]
+    if not matched:
+        return None
+    return max(matched, key=lambda row: (_float(row, "target_score"), -_total_calls(row), -_float(row, "total_dollars")))
+
+
+def _is_pareto_efficient(row: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+    score = _float(row, "target_score")
+    calls = _total_calls(row)
+    dollars = _float(row, "total_dollars")
+    for other in rows:
+        if other is row:
+            continue
+        other_score = _float(other, "target_score")
+        other_calls = _total_calls(other)
+        other_dollars = _float(other, "total_dollars")
+        no_worse = other_score >= score and other_calls <= calls and other_dollars <= dollars
+        strictly_better = other_score > score or other_calls < calls or other_dollars < dollars
+        if no_worse and strictly_better:
+            return False
+    return True
+
+
+def _winner(score_delta: float, tolerance: float = 1e-9) -> str:
+    if score_delta > tolerance:
+        return "ipeo"
+    if score_delta < -tolerance:
+        return "baseline"
+    return "tie"
+
+
+def _mean(values: Any) -> float:
+    materialized = [float(value) for value in values]
+    return sum(materialized) / len(materialized) if materialized else 0.0
+
+
+def _total_calls(row: dict[str, Any]) -> int:
+    return _int(row, "source_calls") + _int(row, "target_calls")
+
+
+def _total_calls_then_dollars(row: dict[str, Any]) -> tuple[int, float, str]:
+    return (_total_calls(row), _float(row, "total_dollars"), str(row.get("method", "")))
+
+
+def _float(row: dict[str, Any] | None, key: str) -> float:
+    if row is None:
+        return 0.0
+    return _parse_float(row.get(key, 0.0))
+
+
+def _int(row: dict[str, Any] | None, key: str) -> int:
+    if row is None:
+        return 0
+    return _parse_int(row.get(key, 0))
+
+
+def _parse_float(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_int(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0

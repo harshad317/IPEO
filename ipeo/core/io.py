@@ -42,6 +42,14 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def read_csv(path: str | Path) -> list[dict[str, str]]:
+    p = Path(path)
+    if not p.exists() or not p.read_text(encoding="utf-8").strip():
+        return []
+    with p.open("r", newline="", encoding="utf-8") as f:
+        return [dict(row) for row in csv.DictReader(f)]
+
+
 def write_csv(path: str | Path, rows: Iterable[Mapping[str, Any]]) -> Path:
     materialized = [dict(row) for row in rows]
     p = ensure_parent(path)

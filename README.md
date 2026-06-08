@@ -57,6 +57,35 @@ The main comparison tracks are:
 No method is allowed to use target test for selection; target test is evaluated
 only after method selection is complete.
 
+## Analyze A Completed Run
+
+After a benchmark finishes, summarize per-task winners, benchmark tracks,
+cost/performance frontier rows, and IPEO-vs-baseline deltas:
+
+```bash
+python -m ipeo.runners.analyze_run \
+  --artifact_dir artifacts/gpt41mini_fair_split_v1
+```
+
+Focus on one stress task:
+
+```bash
+python -m ipeo.runners.analyze_run \
+  --artifact_dir artifacts/gpt41mini_fair_split_v1 \
+  --focus_task ifbench_hard
+```
+
+This writes:
+
+- `stats/analysis_per_task_winners.csv`
+- `stats/analysis_track_summary.csv`
+- `stats/analysis_method_task_summary.csv`
+- `stats/analysis_ipeo_vs_baselines.csv`
+- `stats/analysis_cost_frontier.csv`
+
+With `--focus_task`, the files get a task suffix such as
+`stats/analysis_per_task_winners_ifbench_hard.csv`.
+
 ## Live OpenAI Benchmark
 
 Set `OPENAI_API_KEY` first, then run:
