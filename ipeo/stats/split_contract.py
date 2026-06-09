@@ -9,6 +9,7 @@ from ipeo.core.schemas import MethodSelection
 DSPY_METHODS = {"gepa", "miprov2"}
 TARGET_VALIDATION_METHODS = {"target_only_bo_fixed_pool"}
 IPEO_METHOD_PREFIXES = ("ipeo_",)
+IPEO_SOURCE_VALIDATION_METHODS = {"ipeo_budget_select_source_val"}
 SOURCE_VALIDATION_METHODS = {
     "source_average",
     "pooled_source",
@@ -73,7 +74,13 @@ def access_row(
     validation_access = "none"
     selection_access = "none"
 
-    if is_ipeo_method(method):
+    if method in IPEO_SOURCE_VALIDATION_METHODS:
+        source_train = source_train_calls
+        source_val = source_validation_calls
+        train_access = "source_train"
+        validation_access = "source_validation"
+        selection_access = "source_train,source_validation"
+    elif is_ipeo_method(method):
         source_train = source_train_calls
         train_access = "source_train"
         selection_access = "source_train"

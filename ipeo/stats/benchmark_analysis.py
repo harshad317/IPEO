@@ -41,6 +41,7 @@ DEFAULT_BASELINES = [
 ]
 DEFAULT_IPEO_METHODS = [
     "ipeo_budget_select",
+    "ipeo_budget_select_source_val",
     "ipeo_budget_200",
     "ipeo_budget_500",
     "ipeo_budget_1000",

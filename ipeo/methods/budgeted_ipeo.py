@@ -238,3 +238,75 @@ def select_budgeted_prompt(
         source_score=float(best_row["source_score"]),
         score_rows=score_rows,
     )
+
+
+def select_budgeted_prompt_by_source_validation(
+    *,
+    candidates: list[BudgetedPromptCandidate],
+    validation_results: list[EvalResult],
+    task_id: str,
+    fold_id: str,
+    target_model: str,
+    method_name: str = "ipeo_budget_select_source_val",
+) -> BudgetedPromptChoice:
+    if not candidates:
+        raise ValueError("candidates must be non-empty")
+    validation_score_by_prompt = _mean_validation_scores(validation_results)
+    invariant_rows = {row["method"]: row for row in [budget_candidate_source_score(candidate) for candidate in candidates]}
+    score_rows: list[dict[str, float | int | str]] = []
+    for candidate in candidates:
+        validation_score = validation_score_by_prompt.get(candidate.prompt.prompt_id, 0.0)
+        invariant_row = invariant_rows[candidate.method]
+        score_rows.append(
+            {
+                **invariant_row,
+                "source_score": float(validation_score),
+                "validation_score": float(validation_score),
+                "invariant_source_score": float(invariant_row["source_score"]),
+                "validation_calls": sum(1 for row in validation_results if row.prompt_id == candidate.prompt.prompt_id),
+            }
+        )
+    candidate_by_method = {candidate.method: candidate for candidate in candidates}
+    best_row = max(
+        score_rows,
+        key=lambda row: (
+            float(row["validation_score"]),
+            float(row["invariant_source_score"]),
+            -int(row["source_calls"]),
+            -int(row["prompt_tokens"]),
+            str(row["method"]),
+        ),
+    )
+    chosen = candidate_by_method[str(best_row["method"])]
+    selection = MethodSelection(
+        method=method_name,
+        task_id=task_id,
+        fold_id=fold_id,
+        target_model=target_model,
+        source_models=chosen.selection.source_models,
+        prompt_id=chosen.prompt.prompt_id,
+        prompt_text=chosen.prompt.text,
+        selected_edit_ids=chosen.prompt.edit_ids,
+    )
+    return BudgetedPromptChoice(
+        selection=selection,
+        prompt=chosen.prompt,
+        chosen_method=chosen.method,
+        requested_budget=chosen.requested_budget,
+        source_calls=chosen.source_calls,
+        source_score=float(best_row["source_score"]),
+        score_rows=score_rows,
+    )
+
+
+def _mean_validation_scores(results: list[EvalResult]) -> dict[str, float]:
+    scores_by_prompt: dict[str, list[float]] = {}
+    for row in results:
+        if row.split != "val":
+            continue
+        scores_by_prompt.setdefault(row.prompt_id, []).append(float(row.score))
+    return {
+        prompt_id: sum(scores) / len(scores)
+        for prompt_id, scores in scores_by_prompt.items()
+        if scores
+    }

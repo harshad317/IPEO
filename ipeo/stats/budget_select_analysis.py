@@ -10,7 +10,8 @@ from typing import Any
 from ipeo.core.io import read_jsonl
 
 BUDGET_SELECT_METHOD = "ipeo_budget_select"
-BUDGET_SELECT_SUFFIX = f"_{BUDGET_SELECT_METHOD}.jsonl"
+BUDGET_SELECT_SOURCE_VAL_METHOD = "ipeo_budget_select_source_val"
+BUDGET_SELECTOR_METHODS = (BUDGET_SELECT_METHOD, BUDGET_SELECT_SOURCE_VAL_METHOD)
 
 
 def budget_select_decision_rows(
@@ -28,19 +29,22 @@ def budget_select_decision_rows(
         for row in transfer_rows
     }
     outputs: list[dict[str, Any]] = []
-    for path in sorted(stats_dir.glob(f"*{BUDGET_SELECT_SUFFIX}")):
-        task_id = path.name[: -len(BUDGET_SELECT_SUFFIX)]
-        if focus_task is not None and task_id != focus_task:
-            continue
-        for audit in read_jsonl(path):
-            row = _decision_row(
-                task_id=task_id,
-                audit=audit,
-                transfer_by_task_method=transfer_by_task_method,
-            )
-            if run_label is not None:
-                row["run_label"] = run_label
-            outputs.append(row)
+    for selector_method in BUDGET_SELECTOR_METHODS:
+        suffix = f"_{selector_method}.jsonl"
+        for path in sorted(stats_dir.glob(f"*{suffix}")):
+            task_id = path.name[: -len(suffix)]
+            if focus_task is not None and task_id != focus_task:
+                continue
+            for audit in read_jsonl(path):
+                row = _decision_row(
+                    task_id=task_id,
+                    selector_method=selector_method,
+                    audit=audit,
+                    transfer_by_task_method=transfer_by_task_method,
+                )
+                if run_label is not None:
+                    row["run_label"] = run_label
+                outputs.append(row)
     return outputs
 
 
@@ -52,12 +56,12 @@ def summarize_budget_select_decisions(
     confidence_level: float = 0.95,
     tolerance: float = 1e-9,
 ) -> list[dict[str, Any]]:
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        grouped[str(row.get("task_id", ""))].append(row)
+        grouped[(str(row.get("task_id", "")), str(row.get("method", "")))].append(row)
 
     outputs: list[dict[str, Any]] = []
-    for index, (task_id, task_rows) in enumerate(sorted(grouped.items())):
+    for index, ((task_id, method), task_rows) in enumerate(sorted(grouped.items())):
         known = [row for row in task_rows if _has_number(row.get("oracle_budget_target_score"))]
         regrets = [_number(row.get("budget_selector_regret")) for row in known]
         chosen_scores = [_number(row.get("selected_target_score")) for row in known]
@@ -68,6 +72,7 @@ def summarize_budget_select_decisions(
         outputs.append(
             {
                 "task_id": task_id,
+                "method": method,
                 "num_runs": len(task_rows),
                 "num_known_oracle_runs": len(known),
                 "selection_accuracy": _mean(1.0 if row.get("chosen_method") == row.get("oracle_budget_method") else 0.0 for row in known),
@@ -89,12 +94,13 @@ def summarize_budget_select_decisions(
 def _decision_row(
     *,
     task_id: str,
+    selector_method: str,
     audit: dict[str, Any],
     transfer_by_task_method: dict[tuple[str, str], dict[str, Any]],
 ) -> dict[str, Any]:
     candidate_scores = _candidate_scores(audit)
     chosen_method = str(audit.get("chosen_method", ""))
-    selected_transfer = transfer_by_task_method.get((task_id, BUDGET_SELECT_METHOD), {})
+    selected_transfer = transfer_by_task_method.get((task_id, selector_method), {})
     chosen_transfer = transfer_by_task_method.get((task_id, chosen_method), {})
     candidate_transfers = {
         method: transfer_by_task_method.get((task_id, method), {})
@@ -124,7 +130,7 @@ def _decision_row(
     )
     return {
         "task_id": task_id,
-        "method": BUDGET_SELECT_METHOD,
+        "method": selector_method,
         "chosen_method": chosen_method,
         "chosen_requested_budget": _optional_int(audit.get("requested_budget")),
         "chosen_source_calls": _optional_int(audit.get("source_calls")),

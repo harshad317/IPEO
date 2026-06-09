@@ -126,12 +126,13 @@ def _print_budget_select_summary(console: Console, rows: list[dict[str, Any]]) -
     if not rows:
         return
     table = Table(title="Multi-run budget selector summary")
-    for column in ["task", "runs", "accuracy", "regret_ci", "chosen", "oracle"]:
+    for column in ["task", "selector", "runs", "accuracy", "regret_ci", "chosen", "oracle"]:
         table.add_column(column)
     for row in rows:
         regret_ci = f"{_fmt(row.get('mean_budget_selector_regret'))} [{_fmt(row.get('budget_selector_regret_ci_low'))}, {_fmt(row.get('budget_selector_regret_ci_high'))}]"
         table.add_row(
             str(row.get("task_id", "")),
+            str(row.get("method", "")),
             str(row.get("num_runs", "")),
             _fmt(row.get("selection_accuracy"), digits=2),
             regret_ci,
@@ -145,12 +146,13 @@ def _print_budget_select_decisions(console: Console, rows: list[dict[str, Any]])
     if not rows:
         return
     table = Table(title="Multi-run budget selector decisions")
-    for column in ["run", "task", "chosen", "score", "oracle", "oracle_score", "regret", "outcome"]:
+    for column in ["run", "task", "selector", "chosen", "score", "oracle", "oracle_score", "regret", "outcome"]:
         table.add_column(column)
     for row in rows[:30]:
         table.add_row(
             str(row.get("run_label", "")),
             str(row.get("task_id", "")),
+            str(row.get("method", "")),
             str(row.get("chosen_method", "")),
             _fmt(row.get("selected_target_score")),
             str(row.get("oracle_budget_method", "")),

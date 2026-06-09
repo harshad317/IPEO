@@ -5,11 +5,17 @@ from dataclasses import replace
 from pathlib import Path
 
 from ipeo.core.ids import stable_hash
-from ipeo.core.schemas import GenerationConfig, InvariantEditStats, MethodSelection
+from ipeo.core.schemas import EvalResult, GenerationConfig, InvariantEditStats, MethodSelection
 from ipeo.evaluation.cache import ResponseCache, make_cache_key
 from ipeo.evaluation.cost_ledger import CostLedger
 from ipeo.evaluation.evaluator import evaluate_pool
-from ipeo.methods.budgeted_ipeo import BudgetedPromptCandidate, build_budgeted_source_subset, plan_budgeted_source_subset, select_budgeted_prompt
+from ipeo.methods.budgeted_ipeo import (
+    BudgetedPromptCandidate,
+    build_budgeted_source_subset,
+    plan_budgeted_source_subset,
+    select_budgeted_prompt,
+    select_budgeted_prompt_by_source_validation,
+)
 from ipeo.methods.ipeo_zero import prompt_invariant_score, select_existing_prompt_by_invariant_score
 from ipeo.models.mock import get_mock_model
 from ipeo.prompts.pool_builder import build_frozen_pool
@@ -238,6 +244,39 @@ def test_budgeted_prompt_selector_uses_source_only_score(tmp_path: Path) -> None
     assert len(choice.score_rows) == 2
 
 
+def test_budgeted_prompt_source_validation_selector_uses_held_out_source_scores(tmp_path: Path) -> None:
+    pool, edits = build_frozen_pool("gsm8k", num_prompts=8, artifact_dir=tmp_path)
+    prompt_200 = replace(pool[1], edit_ids=[edits[0].edit_id])
+    prompt_1000 = replace(pool[2], edit_ids=[edits[1].edit_id])
+    stats_200 = [_invariant_row(edits[0], score=0.2, lcb=0.0, sign=0.5, rank=0.5)]
+    stats_1000 = [_invariant_row(edits[1], score=1.0, lcb=0.5, sign=1.0, rank=1.0)]
+    candidates = [
+        _budget_candidate("ipeo_budget_200", 200, 180, prompt_200, [edits[0].edit_id], stats_200),
+        _budget_candidate("ipeo_budget_1000", 1000, 990, prompt_1000, [edits[1].edit_id], stats_1000),
+    ]
+    validation_rows = [
+        _validation_row(prompt_200.prompt_id, "source-a", "ex-1", 1.0),
+        _validation_row(prompt_200.prompt_id, "source-a", "ex-2", 1.0),
+        _validation_row(prompt_1000.prompt_id, "source-a", "ex-1", 0.0),
+        _validation_row(prompt_1000.prompt_id, "source-a", "ex-2", 0.0),
+    ]
+
+    choice = select_budgeted_prompt_by_source_validation(
+        candidates=candidates,
+        validation_results=validation_rows,
+        task_id="gsm8k",
+        fold_id="fold",
+        target_model="target",
+    )
+
+    assert choice.selection.method == "ipeo_budget_select_source_val"
+    assert choice.chosen_method == "ipeo_budget_200"
+    assert choice.source_score == 1.0
+    chosen_row = next(row for row in choice.score_rows if row["method"] == "ipeo_budget_200")
+    assert chosen_row["validation_score"] == 1.0
+    assert chosen_row["invariant_source_score"] < 1.0
+
+
 def _invariant_row(edit, *, score: float, lcb: float, sign: float, rank: float) -> InvariantEditStats:
     return InvariantEditStats(
         task_id="gsm8k",
@@ -290,6 +329,21 @@ def _eval_row(prompt_id: str, example_id: str, model_id: str):
         raw_output_path="raw",
         parsed_output={"raw": "1"},
         score=1.0,
+        parse_success=True,
+    )
+
+
+def _validation_row(prompt_id: str, model_id: str, example_id: str, score: float) -> EvalResult:
+    return EvalResult(
+        run_id="run",
+        task_id="gsm8k",
+        model_id=model_id,
+        prompt_id=prompt_id,
+        example_id=example_id,
+        split="val",
+        raw_output_path="raw",
+        parsed_output={"raw": "1"},
+        score=score,
         parse_success=True,
     )
 

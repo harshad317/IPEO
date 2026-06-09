@@ -26,7 +26,12 @@ from ipeo.methods.fixed_pool import (
     source_average_selection,
     target_only_bo_selection,
 )
-from ipeo.methods.budgeted_ipeo import BudgetedPromptCandidate, build_budgeted_source_subset, select_budgeted_prompt
+from ipeo.methods.budgeted_ipeo import (
+    BudgetedPromptCandidate,
+    build_budgeted_source_subset,
+    select_budgeted_prompt,
+    select_budgeted_prompt_by_source_validation,
+)
 from ipeo.methods.ipeo_zero import (
     select_composed_vs_existing_prompt,
     select_existing_prompt_by_invariant_score,
@@ -47,6 +52,7 @@ IPEO_BUDGET_METHODS = {
     "ipeo_budget_1000": 1000,
 }
 IPEO_BUDGET_SELECT_METHOD = "ipeo_budget_select"
+IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD = "ipeo_budget_select_source_val"
 
 
 def parse_args() -> argparse.Namespace:
@@ -218,6 +224,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         budgeted_ipeo_prompts: list[PromptCandidate] = []
         budgeted_ipeo_selections: list[MethodSelection] = []
         budgeted_source_calls_by_method: dict[str, int] = {}
+        budgeted_source_train_calls_by_method: dict[str, int] = {}
+        budgeted_source_validation_calls_by_method: dict[str, int] = {}
         budgeted_dollars_by_method: dict[str, float] = {}
         budgeted_prompt_candidates: list[BudgetedPromptCandidate] = []
         budgeted_eval_rows_by_method: dict[str, list[EvalResult]] = {}
@@ -270,6 +278,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             budgeted_ipeo_prompts.append(budget_prompt)
             budgeted_ipeo_selections.append(budget_selection)
             budgeted_source_calls_by_method[method_name] = subset.source_calls
+            budgeted_source_train_calls_by_method[method_name] = subset.source_calls
             budgeted_dollars_by_method[method_name] = cost_ledger.method_estimated_cost(
                 "fixed_pool",
                 run_id=run_id,
@@ -290,6 +299,11 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     invariant_table=budget_table,
                 )
             )
+        unique_train_eval_rows = {
+            (row.model_id, row.prompt_id, row.example_id): row
+            for candidate in budgeted_prompt_candidates
+            for row in budgeted_eval_rows_by_method.get(candidate.method, [])
+        }
         budget_choice = select_budgeted_prompt(
             candidates=budgeted_prompt_candidates,
             task_id=task.task_id,
@@ -298,15 +312,11 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             method_name=IPEO_BUDGET_SELECT_METHOD,
         )
         budgeted_ipeo_selections.append(budget_choice.selection)
-        unique_eval_rows = {
-            (row.model_id, row.prompt_id, row.example_id): row
-            for candidate in budgeted_prompt_candidates
-            for row in budgeted_eval_rows_by_method.get(candidate.method, [])
-        }
-        budgeted_source_calls_by_method[IPEO_BUDGET_SELECT_METHOD] = len(unique_eval_rows)
+        budgeted_source_calls_by_method[IPEO_BUDGET_SELECT_METHOD] = len(unique_train_eval_rows)
+        budgeted_source_train_calls_by_method[IPEO_BUDGET_SELECT_METHOD] = len(unique_train_eval_rows)
         budgeted_dollars_by_method[IPEO_BUDGET_SELECT_METHOD] = cost_ledger.method_estimated_cost_for_eval_results(
             "fixed_pool",
-            list(unique_eval_rows.values()),
+            list(unique_train_eval_rows.values()),
             run_id=run_id,
             phase="baseline_optimization",
             task_id=task.task_id,
@@ -323,6 +333,74 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     "prompt_id": budget_choice.prompt.prompt_id,
                     "selected_edit_ids": budget_choice.selection.selected_edit_ids,
                     "candidate_scores": budget_choice.score_rows,
+                }
+            ],
+        )
+        validation_prompts = _dedupe_prompts([candidate.prompt for candidate in budgeted_prompt_candidates])
+        budgeted_source_validation_results = evaluate_pool(
+            run_id=run_id,
+            task=task,
+            models=[model_by_id[model_id] for model_id in source_models],
+            pool=validation_prompts,
+            examples=val_examples,
+            cache=cache,
+            cost_ledger=cost_ledger,
+            generation_config=config,
+            method="fixed_pool",
+            fold_id=fold_id,
+            seed=args.seed,
+            phase="calibration",
+            artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_{IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD}_source_val.jsonl",
+            show_tqdm=settings.use_tqdm,
+        )
+        pool_results.extend(budgeted_source_validation_results)
+        budget_val_choice = select_budgeted_prompt_by_source_validation(
+            candidates=budgeted_prompt_candidates,
+            validation_results=budgeted_source_validation_results,
+            task_id=task.task_id,
+            fold_id=fold_id,
+            target_model=args.fold_target,
+            method_name=IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD,
+        )
+        budgeted_ipeo_selections.append(budget_val_choice.selection)
+        unique_val_eval_rows = {
+            (row.model_id, row.prompt_id, row.example_id): row
+            for row in budgeted_source_validation_results
+        }
+        train_calls = len(unique_train_eval_rows)
+        val_calls = len(unique_val_eval_rows)
+        budgeted_source_train_calls_by_method[IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD] = train_calls
+        budgeted_source_validation_calls_by_method[IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD] = val_calls
+        budgeted_source_calls_by_method[IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD] = train_calls + val_calls
+        train_cost = cost_ledger.method_estimated_cost_for_eval_results(
+            "fixed_pool",
+            list(unique_train_eval_rows.values()),
+            run_id=run_id,
+            phase="baseline_optimization",
+            task_id=task.task_id,
+        )
+        val_cost = cost_ledger.method_estimated_cost_for_eval_results(
+            "fixed_pool",
+            list(unique_val_eval_rows.values()),
+            run_id=run_id,
+            phase="calibration",
+            task_id=task.task_id,
+        )
+        budgeted_dollars_by_method[IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD] = train_cost + val_cost
+        write_jsonl(
+            artifact_dir / "stats" / f"{task.task_id}_{IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD}.jsonl",
+            [
+                {
+                    "method": IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD,
+                    "chosen_method": budget_val_choice.chosen_method,
+                    "requested_budget": budget_val_choice.requested_budget,
+                    "source_train_calls": train_calls,
+                    "source_validation_calls": val_calls,
+                    "source_calls": train_calls + val_calls,
+                    "source_score": budget_val_choice.source_score,
+                    "prompt_id": budget_val_choice.prompt.prompt_id,
+                    "selected_edit_ids": budget_val_choice.selection.selected_edit_ids,
+                    "candidate_scores": budget_val_choice.score_rows,
                 }
             ],
         )
@@ -455,6 +533,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             phase="calibration",
             model_ids=set(source_models),
             task_id=task.task_id,
+            prompt_ids={prompt.prompt_id for prompt in pool},
         )
         target_bo_prompt_ids = {prompt.prompt_id for prompt in pool[: min(8, len(pool))]}
         target_pool_val_cost = cost_ledger.method_estimated_cost(
@@ -491,6 +570,10 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         source_calls_by_method = {method: source_validation_calls for method in source_call_methods}
         source_calls_by_method.update({method: source_train_calls for method in ipeo_source_call_methods})
         source_calls_by_method.update(budgeted_source_calls_by_method)
+        source_train_calls_by_method = {method: source_train_calls for method in ipeo_source_call_methods}
+        source_train_calls_by_method.update(budgeted_source_train_calls_by_method)
+        source_validation_calls_by_method = {method: source_validation_calls for method in source_call_methods}
+        source_validation_calls_by_method.update(budgeted_source_validation_calls_by_method)
         dollars_by_method = {method: source_validation_cost for method in source_call_methods}
         dollars_by_method.update({method: source_train_cost for method in ipeo_source_call_methods})
         dollars_by_method.update(budgeted_dollars_by_method)
@@ -511,8 +594,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             access_row(
                 task_id=task.task_id,
                 selection=selection,
-                source_train_calls=source_calls_by_method.get(selection.method, source_train_calls),
-                source_validation_calls=source_validation_calls,
+                source_train_calls=source_train_calls_by_method.get(selection.method, source_calls_by_method.get(selection.method, source_train_calls)),
+                source_validation_calls=source_validation_calls_by_method.get(selection.method, source_validation_calls),
                 target_validation_calls=target_calls_by_method.get(selection.method, 0),
                 target_optimization_calls=target_calls_by_method.get(selection.method, selection.target_calls),
                 final_target_test_calls=len(test_examples),

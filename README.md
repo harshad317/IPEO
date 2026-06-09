@@ -112,7 +112,7 @@ for seed in 0 1 2 3 4; do
     --model gpt-4.1-mini \
     --num_prompts 30 \
     --num_examples 48 \
-    --methods ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select miprov2 gepa source_average target_only_bo_fixed_pool best_source_transfer \
+    --methods ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val miprov2 gepa source_average target_only_bo_fixed_pool best_source_transfer \
     --workers 8 \
     --timeout_seconds 300 \
     --max_retries 6 \
@@ -145,13 +145,13 @@ python -m ipeo.runners.analyze_many \
 This writes `stats/multi_run_method_summary*.csv`,
 `stats/multi_run_ipeo_vs_baselines*.csv`,
 `stats/multi_run_cost_frontier*.csv`, and
-`stats/multi_run_combined_transfer_rows*.csv`. When `ipeo_budget_select` is
+`stats/multi_run_combined_transfer_rows*.csv`. When a budget selector is
 present, it also writes `stats/multi_run_budget_select_decisions*.csv` and
-`stats/multi_run_budget_select_summary*.csv`; these show the chosen budget,
-the best realized budget candidate, selector regret, and chosen/oracle budget
-counts across seeds. These reports include mean score, bootstrap confidence
-intervals, score win/tie/loss rate, mean calls, mean dollars, and the
-aggregate cost/performance frontier.
+`stats/multi_run_budget_select_summary*.csv`; these show the selector, chosen
+budget, best realized budget candidate, selector regret, and chosen/oracle
+budget counts across seeds. These reports include mean score, bootstrap
+confidence intervals, score win/tie/loss rate, mean calls, mean dollars, and
+the aggregate cost/performance frontier.
 
 ## Live OpenAI Benchmark
 
@@ -179,7 +179,7 @@ reported as skipped until a compatible `promptolution` runner is wired.
 Useful IPEO ablations:
 
 ```bash
---methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
+--methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
 ```
 
 `ipeo_budget_200`, `ipeo_budget_500`, and `ipeo_budget_1000` estimate invariant
@@ -200,6 +200,11 @@ auditable. `analyze_run` and `analyze_many` join that audit file with
 `transfer_regret.csv` to report whether the selector chose the best realized
 budget candidate.
 
+`ipeo_budget_select_source_val` builds the same budget candidates, then
+evaluates only those candidate prompts on the source validation split and
+selects by held-out source score. It still uses zero target data, but reports
+both source-train and source-validation calls in the data-access ledger.
+
 `ipeo_select_existing` scores each frozen-pool prompt by the sum of invariant
 scores for its edit vector and selects the best existing prompt.
 `ipeo_composed_vs_existing` compares the zero-target composed prompt with that
@@ -216,7 +221,7 @@ python -m ipeo.runners.run_openai \
   --model gpt-4.1-mini \
   --num_prompts 30 \
   --num_examples 48 \
-  --methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
+  --methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
   --workers 8 \
   --timeout_seconds 300 \
   --max_retries 6 \
