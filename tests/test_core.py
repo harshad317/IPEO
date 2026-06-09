@@ -11,8 +11,10 @@ from ipeo.evaluation.cost_ledger import CostLedger
 from ipeo.evaluation.evaluator import evaluate_pool
 from ipeo.methods.budgeted_ipeo import (
     BudgetedPromptCandidate,
+    build_expanded_prompt_candidates,
     build_budgeted_source_subset,
     plan_budgeted_source_subset,
+    select_expanded_prompt_by_source_validation,
     select_budgeted_prompt,
     select_budgeted_prompt_by_source_validation,
 )
@@ -277,9 +279,49 @@ def test_budgeted_prompt_source_validation_selector_uses_held_out_source_scores(
     assert chosen_row["invariant_source_score"] < 1.0
 
 
+def test_expanded_prompt_candidates_and_selector_use_source_validation(tmp_path: Path) -> None:
+    pool, edits = build_frozen_pool("ifbench_hard", num_prompts=10, artifact_dir=tmp_path)
+    invariant_table = [
+        _invariant_row(edit, score=1.0 - index * 0.05, lcb=-0.01, sign=0.8, rank=0.8)
+        for index, edit in enumerate(edits[:6])
+    ]
+
+    candidates = build_expanded_prompt_candidates(
+        task_id="ifbench_hard",
+        seed_prompt=pool[0],
+        pool=pool,
+        edits=edits,
+        invariant_table=invariant_table,
+        max_candidates=5,
+        max_edits_per_prompt=4,
+    )
+    assert 1 < len(candidates) <= 5
+    assert len({prompt.prompt_id for prompt in candidates}) == len(candidates)
+    assert any(prompt.source_generator == "ipeo_composed" for prompt in candidates)
+
+    best_prompt = candidates[-1]
+    validation_rows = []
+    for prompt in candidates:
+        validation_rows.append(_validation_row(prompt.prompt_id, "source-a", f"{prompt.prompt_id}-1", 1.0 if prompt.prompt_id == best_prompt.prompt_id else 0.0))
+        validation_rows.append(_validation_row(prompt.prompt_id, "source-b", f"{prompt.prompt_id}-2", 1.0 if prompt.prompt_id == best_prompt.prompt_id else 0.0))
+
+    choice = select_expanded_prompt_by_source_validation(
+        candidates=candidates,
+        validation_results=validation_rows,
+        task_id="ifbench_hard",
+        fold_id="fold",
+        target_model="target",
+        source_models=["source-a", "source-b"],
+    )
+
+    assert choice.selection.method == "ipeo_expand_500_source_val"
+    assert choice.prompt.prompt_id == best_prompt.prompt_id
+    assert choice.validation_score == 1.0
+
+
 def _invariant_row(edit, *, score: float, lcb: float, sign: float, rank: float) -> InvariantEditStats:
     return InvariantEditStats(
-        task_id="gsm8k",
+        task_id=edit.task_id,
         edit_id=edit.edit_id,
         edit_type=edit.edit_type,
         token_delta=edit.estimated_token_delta,

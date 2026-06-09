@@ -5,8 +5,10 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from ipeo.core.schemas import EvalResult, Example, InvariantEditStats, MethodSelection, PromptCandidate
+from ipeo.core.schemas import AtomicEdit, EvalResult, Example, InvariantEditStats, MethodSelection, PromptCandidate
+from ipeo.core.ids import stable_hash
 from ipeo.models.base import count_tokens
+from ipeo.prompts.composer import compose_text, has_conflict
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,14 @@ class BudgetedPromptChoice:
     requested_budget: int
     source_calls: int
     source_score: float
+    score_rows: list[dict[str, float | int | str]]
+
+
+@dataclass(frozen=True)
+class ExpandedPromptChoice:
+    selection: MethodSelection
+    prompt: PromptCandidate
+    validation_score: float
     score_rows: list[dict[str, float | int | str]]
 
 
@@ -299,6 +309,177 @@ def select_budgeted_prompt_by_source_validation(
     )
 
 
+def build_expanded_prompt_candidates(
+    *,
+    task_id: str,
+    seed_prompt: PromptCandidate,
+    pool: list[PromptCandidate],
+    edits: list[AtomicEdit],
+    invariant_table: list[InvariantEditStats],
+    method_name: str = "ipeo_expand_500_source_val",
+    max_candidates: int = 8,
+    max_edits_per_prompt: int = 5,
+    min_sign_agreement: float = 0.0,
+    min_lcb: float = -0.10,
+    max_prompt_tokens: int | None = None,
+) -> list[PromptCandidate]:
+    edit_by_id = {edit.edit_id: edit for edit in edits}
+    ranked_rows = [
+        row
+        for row in sorted(
+            invariant_table,
+            key=lambda item: (item.ipeo_score, item.lcb_mean_effect, item.sign_agreement, -item.token_delta),
+            reverse=True,
+        )
+        if not row.is_placebo and row.sign_agreement >= min_sign_agreement and row.lcb_mean_effect >= min_lcb and row.edit_id in edit_by_id
+    ]
+    token_budget = max_prompt_tokens or int(count_tokens(seed_prompt.text) * 1.7) + 48
+    greedy_candidates: list[PromptCandidate] = []
+    diverse_candidates: list[PromptCandidate] = []
+    sliding_candidates: list[PromptCandidate] = []
+    selected: list[AtomicEdit] = []
+    for row in ranked_rows:
+        edit = edit_by_id[row.edit_id]
+        if has_conflict(edit, selected):
+            continue
+        proposed = selected + [edit]
+        if count_tokens(compose_text(seed_prompt.text, proposed)) > token_budget:
+            continue
+        selected = proposed
+        greedy_candidates.append(
+            _expanded_candidate(
+                task_id=task_id,
+                seed_prompt=seed_prompt,
+                edits=edits,
+                selected_edits=selected,
+                method_name=method_name,
+                variant="greedy_prefix",
+            )
+        )
+        if len(selected) >= max_edits_per_prompt:
+            break
+
+    best_by_type: dict[str, InvariantEditStats] = {}
+    for row in ranked_rows:
+        best_by_type.setdefault(row.edit_type, row)
+    diverse_edits: list[AtomicEdit] = []
+    for row in sorted(best_by_type.values(), key=lambda item: item.ipeo_score, reverse=True):
+        edit = edit_by_id[row.edit_id]
+        if has_conflict(edit, diverse_edits):
+            continue
+        diverse_edits.append(edit)
+        if len(diverse_edits) >= max_edits_per_prompt:
+            break
+    if diverse_edits:
+        diverse_candidates.append(
+            _expanded_candidate(
+                task_id=task_id,
+                seed_prompt=seed_prompt,
+                edits=edits,
+                selected_edits=diverse_edits,
+                method_name=method_name,
+                variant="type_diverse",
+            )
+        )
+
+    top_edits = [edit_by_id[row.edit_id] for row in ranked_rows[: min(7, len(ranked_rows))]]
+    for start in range(len(top_edits)):
+        combo: list[AtomicEdit] = []
+        for edit in top_edits[start:]:
+            if has_conflict(edit, combo):
+                continue
+            combo.append(edit)
+            if len(combo) >= 3:
+                break
+        if combo:
+            sliding_candidates.append(
+                _expanded_candidate(
+                    task_id=task_id,
+                    seed_prompt=seed_prompt,
+                    edits=edits,
+                    selected_edits=combo,
+                    method_name=method_name,
+                    variant=f"sliding_{start}",
+                )
+            )
+
+    edit_score = {row.edit_id: row.ipeo_score for row in invariant_table}
+    existing_prompts = sorted(
+        pool,
+        key=lambda prompt: (
+            sum(edit_score.get(edit_id, 0.0) for edit_id in prompt.edit_ids),
+            -count_tokens(prompt.text),
+            prompt.prompt_id,
+        ),
+        reverse=True,
+    )
+    existing_reserve = min(3, len(existing_prompts), max_candidates)
+    generated_candidates = greedy_candidates + diverse_candidates + sliding_candidates
+    generated_first = _dedupe_prompt_candidates(
+        generated_candidates,
+        max_candidates=max(0, max_candidates - existing_reserve),
+    )
+    return _dedupe_prompt_candidates(
+        generated_first
+        + existing_prompts[:existing_reserve]
+        + generated_candidates
+        + existing_prompts[existing_reserve:],
+        max_candidates=max_candidates,
+    )
+
+
+def select_expanded_prompt_by_source_validation(
+    *,
+    candidates: list[PromptCandidate],
+    validation_results: list[EvalResult],
+    task_id: str,
+    fold_id: str,
+    target_model: str,
+    source_models: list[str],
+    method_name: str = "ipeo_expand_500_source_val",
+) -> ExpandedPromptChoice:
+    if not candidates:
+        raise ValueError("candidates must be non-empty")
+    validation_score_by_prompt = _mean_validation_scores(validation_results)
+    score_rows = [
+        {
+            "prompt_id": prompt.prompt_id,
+            "source_score": float(validation_score_by_prompt.get(prompt.prompt_id, 0.0)),
+            "validation_score": float(validation_score_by_prompt.get(prompt.prompt_id, 0.0)),
+            "prompt_tokens": count_tokens(prompt.text),
+            "edit_count": len(prompt.edit_ids),
+        }
+        for prompt in candidates
+    ]
+    prompt_by_id = {prompt.prompt_id: prompt for prompt in candidates}
+    best_row = max(
+        score_rows,
+        key=lambda row: (
+            float(row["validation_score"]),
+            -int(row["prompt_tokens"]),
+            -int(row["edit_count"]),
+            str(row["prompt_id"]),
+        ),
+    )
+    chosen = prompt_by_id[str(best_row["prompt_id"])]
+    selection = MethodSelection(
+        method=method_name,
+        task_id=task_id,
+        fold_id=fold_id,
+        target_model=target_model,
+        source_models=source_models,
+        prompt_id=chosen.prompt_id,
+        prompt_text=chosen.text,
+        selected_edit_ids=chosen.edit_ids,
+    )
+    return ExpandedPromptChoice(
+        selection=selection,
+        prompt=chosen,
+        validation_score=float(best_row["validation_score"]),
+        score_rows=score_rows,
+    )
+
+
 def _mean_validation_scores(results: list[EvalResult]) -> dict[str, float]:
     scores_by_prompt: dict[str, list[float]] = {}
     for row in results:
@@ -310,3 +491,51 @@ def _mean_validation_scores(results: list[EvalResult]) -> dict[str, float]:
         for prompt_id, scores in scores_by_prompt.items()
         if scores
     }
+
+
+def _expanded_candidate(
+    *,
+    task_id: str,
+    seed_prompt: PromptCandidate,
+    edits: list[AtomicEdit],
+    selected_edits: list[AtomicEdit],
+    method_name: str,
+    variant: str,
+) -> PromptCandidate:
+    text = compose_text(seed_prompt.text, selected_edits)
+    edit_ids = [edit.edit_id for edit in selected_edits]
+    prompt_id = stable_hash(
+        {"method": method_name, "task": task_id, "variant": variant, "text": text, "edits": edit_ids},
+        prefix="p-ipeo-expand-",
+    )
+    edit_id_set = set(edit_ids)
+    return PromptCandidate(
+        prompt_id=prompt_id,
+        task_id=task_id,
+        text=text,
+        edit_ids=edit_ids,
+        edit_vector=[1 if edit.edit_id in edit_id_set else 0 for edit in edits],
+        source_generator="ipeo_composed",
+        parent_prompt_ids=[seed_prompt.prompt_id],
+        prompt_tokens_by_model={"mock": count_tokens(text)},
+        estimated_deployment_cost={"mock": count_tokens(text) * 0.0001 / 1000},
+        coherence_repaired=False,
+        frozen_pool_version="mvp-v1",
+    )
+
+
+def _dedupe_prompt_candidates(candidates: list[PromptCandidate], *, max_candidates: int) -> list[PromptCandidate]:
+    if max_candidates <= 0:
+        return []
+    seen_texts: set[str] = set()
+    seen_ids: set[str] = set()
+    rows: list[PromptCandidate] = []
+    for prompt in candidates:
+        if prompt.prompt_id in seen_ids or prompt.text in seen_texts:
+            continue
+        seen_ids.add(prompt.prompt_id)
+        seen_texts.add(prompt.text)
+        rows.append(prompt)
+        if len(rows) >= max_candidates:
+            break
+    return rows

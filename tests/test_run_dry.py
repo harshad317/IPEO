@@ -48,6 +48,7 @@ def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     assert any(row["method"] == "ipeo_budget_200" for row in rows)
     assert any(row["method"] == "ipeo_budget_select" for row in rows)
     assert any(row["method"] == "ipeo_budget_select_source_val" for row in rows)
+    assert any(row["method"] == "ipeo_expand_500_source_val" for row in rows)
     assert any(row["method"] == "ipeo_select_existing" for row in rows)
     assert any(row["method"] == "ipeo_composed_vs_existing" for row in rows)
     assert all(row["uses_target_test_for_selection"] is False for row in rows)
@@ -69,8 +70,14 @@ def test_dry_run_writes_core_artifacts(tmp_path: Path) -> None:
     assert budget_source_val_access["selection_access"] == "source_train,source_validation"
     assert budget_source_val_access["uses_target_validation"] is False
     assert budget_source_val_access["source_validation_calls"] > 0
+    expanded_access = next(row for row in access_rows if row["method"] == "ipeo_expand_500_source_val")
+    assert expanded_access["train_access"] == "source_train"
+    assert expanded_access["validation_access"] == "source_validation"
+    assert expanded_access["uses_target_validation"] is False
+    assert expanded_access["source_validation_calls"] > 0
     assert read_jsonl(artifact_dir / "stats" / "gsm8k_ipeo_budget_select.jsonl")
     assert read_jsonl(artifact_dir / "stats" / "gsm8k_ipeo_budget_select_source_val.jsonl")
+    assert read_jsonl(artifact_dir / "stats" / "gsm8k_ipeo_expand_500_source_val.jsonl")
     method_summary = (artifact_dir / "stats" / "method_summary.csv").read_text(encoding="utf-8")
     assert "optimization" in method_summary
     assert "test" in method_summary

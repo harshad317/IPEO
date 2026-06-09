@@ -9,7 +9,7 @@ from ipeo.core.schemas import MethodSelection
 DSPY_METHODS = {"gepa", "miprov2"}
 TARGET_VALIDATION_METHODS = {"target_only_bo_fixed_pool"}
 IPEO_METHOD_PREFIXES = ("ipeo_",)
-IPEO_SOURCE_VALIDATION_METHODS = {"ipeo_budget_select_source_val"}
+IPEO_SOURCE_VALIDATION_METHODS = {"ipeo_budget_select_source_val", "ipeo_expand_500_source_val"}
 SOURCE_VALIDATION_METHODS = {
     "source_average",
     "pooled_source",

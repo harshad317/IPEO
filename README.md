@@ -112,7 +112,7 @@ for seed in 0 1 2 3 4; do
     --model gpt-4.1-mini \
     --num_prompts 30 \
     --num_examples 48 \
-    --methods ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val miprov2 gepa source_average target_only_bo_fixed_pool best_source_transfer \
+    --methods ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val ipeo_expand_500_source_val miprov2 gepa source_average target_only_bo_fixed_pool best_source_transfer \
     --workers 8 \
     --timeout_seconds 300 \
     --max_retries 6 \
@@ -179,7 +179,7 @@ reported as skipped until a compatible `promptolution` runner is wired.
 Useful IPEO ablations:
 
 ```bash
---methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
+--methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val ipeo_expand_500_source_val ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
 ```
 
 `ipeo_budget_200`, `ipeo_budget_500`, and `ipeo_budget_1000` estimate invariant
@@ -205,6 +205,12 @@ evaluates only those candidate prompts on the source validation split and
 selects by held-out source score. It still uses zero target data, but reports
 both source-train and source-validation calls in the data-access ledger.
 
+`ipeo_expand_500_source_val` uses the `ipeo_budget_500` invariant estimate to
+build a small beam of expanded composed/existing prompts, evaluates only those
+candidates on source validation, and selects the best held-out source prompt.
+This tests whether IPEO needs stronger candidates rather than just a better
+budget selector.
+
 `ipeo_select_existing` scores each frozen-pool prompt by the sum of invariant
 scores for its edit vector and selects the best existing prompt.
 `ipeo_composed_vs_existing` compares the zero-target composed prompt with that
@@ -221,7 +227,7 @@ python -m ipeo.runners.run_openai \
   --model gpt-4.1-mini \
   --num_prompts 30 \
   --num_examples 48 \
-  --methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
+  --methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_budget_select_source_val ipeo_expand_500_source_val ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
   --workers 8 \
   --timeout_seconds 300 \
   --max_retries 6 \

@@ -28,9 +28,11 @@ from ipeo.methods.fixed_pool import (
 )
 from ipeo.methods.budgeted_ipeo import (
     BudgetedPromptCandidate,
+    build_expanded_prompt_candidates,
     build_budgeted_source_subset,
     select_budgeted_prompt,
     select_budgeted_prompt_by_source_validation,
+    select_expanded_prompt_by_source_validation,
 )
 from ipeo.methods.ipeo_zero import (
     select_composed_vs_existing_prompt,
@@ -53,6 +55,7 @@ IPEO_BUDGET_METHODS = {
 }
 IPEO_BUDGET_SELECT_METHOD = "ipeo_budget_select"
 IPEO_BUDGET_SELECT_SOURCE_VAL_METHOD = "ipeo_budget_select_source_val"
+IPEO_EXPAND_500_SOURCE_VAL_METHOD = "ipeo_expand_500_source_val"
 
 
 def parse_args() -> argparse.Namespace:
@@ -401,6 +404,88 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     "prompt_id": budget_val_choice.prompt.prompt_id,
                     "selected_edit_ids": budget_val_choice.selection.selected_edit_ids,
                     "candidate_scores": budget_val_choice.score_rows,
+                }
+            ],
+        )
+        base_candidate = next(candidate for candidate in budgeted_prompt_candidates if candidate.method == "ipeo_budget_500")
+        expanded_candidates = build_expanded_prompt_candidates(
+            task_id=task.task_id,
+            seed_prompt=pool[0],
+            pool=pool,
+            edits=edits,
+            invariant_table=base_candidate.invariant_table,
+            method_name=IPEO_EXPAND_500_SOURCE_VAL_METHOD,
+            max_candidates=8,
+            max_edits_per_prompt=invariant_config.max_edits_per_prompt,
+            min_sign_agreement=0.0,
+            min_lcb=-0.10,
+        )
+        expanded_source_validation_results = evaluate_pool(
+            run_id=run_id,
+            task=task,
+            models=[model_by_id[model_id] for model_id in source_models],
+            pool=expanded_candidates,
+            examples=val_examples,
+            cache=cache,
+            cost_ledger=cost_ledger,
+            generation_config=config,
+            method="fixed_pool",
+            fold_id=fold_id,
+            seed=args.seed,
+            phase="calibration",
+            artifact_path=artifact_dir / "eval_results" / f"{task.task_id}_{IPEO_EXPAND_500_SOURCE_VAL_METHOD}_source_val.jsonl",
+            show_tqdm=settings.use_tqdm,
+        )
+        pool_results.extend(expanded_source_validation_results)
+        expanded_choice = select_expanded_prompt_by_source_validation(
+            candidates=expanded_candidates,
+            validation_results=expanded_source_validation_results,
+            task_id=task.task_id,
+            fold_id=fold_id,
+            target_model=args.fold_target,
+            source_models=source_models,
+            method_name=IPEO_EXPAND_500_SOURCE_VAL_METHOD,
+        )
+        budgeted_ipeo_prompts.append(expanded_choice.prompt)
+        budgeted_ipeo_selections.append(expanded_choice.selection)
+        expanded_unique_val_rows = {
+            (row.model_id, row.prompt_id, row.example_id): row
+            for row in expanded_source_validation_results
+        }
+        expanded_train_rows = budgeted_eval_rows_by_method.get("ipeo_budget_500", [])
+        train_calls = len(expanded_train_rows)
+        val_calls = len(expanded_unique_val_rows)
+        budgeted_source_train_calls_by_method[IPEO_EXPAND_500_SOURCE_VAL_METHOD] = train_calls
+        budgeted_source_validation_calls_by_method[IPEO_EXPAND_500_SOURCE_VAL_METHOD] = val_calls
+        budgeted_source_calls_by_method[IPEO_EXPAND_500_SOURCE_VAL_METHOD] = train_calls + val_calls
+        train_cost = cost_ledger.method_estimated_cost_for_eval_results(
+            "fixed_pool",
+            expanded_train_rows,
+            run_id=run_id,
+            phase="baseline_optimization",
+            task_id=task.task_id,
+        )
+        val_cost = cost_ledger.method_estimated_cost_for_eval_results(
+            "fixed_pool",
+            list(expanded_unique_val_rows.values()),
+            run_id=run_id,
+            phase="calibration",
+            task_id=task.task_id,
+        )
+        budgeted_dollars_by_method[IPEO_EXPAND_500_SOURCE_VAL_METHOD] = train_cost + val_cost
+        write_jsonl(
+            artifact_dir / "stats" / f"{task.task_id}_{IPEO_EXPAND_500_SOURCE_VAL_METHOD}.jsonl",
+            [
+                {
+                    "method": IPEO_EXPAND_500_SOURCE_VAL_METHOD,
+                    "base_method": "ipeo_budget_500",
+                    "prompt_id": expanded_choice.prompt.prompt_id,
+                    "validation_score": expanded_choice.validation_score,
+                    "source_train_calls": train_calls,
+                    "source_validation_calls": val_calls,
+                    "source_calls": train_calls + val_calls,
+                    "selected_edit_ids": expanded_choice.selection.selected_edit_ids,
+                    "candidate_scores": expanded_choice.score_rows,
                 }
             ],
         )
