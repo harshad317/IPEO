@@ -39,6 +39,7 @@ DEFAULT_BASELINES = [
     "best_source_transfer",
 ]
 DEFAULT_IPEO_METHODS = [
+    "ipeo_budget_select",
     "ipeo_budget_200",
     "ipeo_budget_500",
     "ipeo_budget_1000",

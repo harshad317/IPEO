@@ -10,7 +10,7 @@ from ipeo.baselines.official_optimizers import official_optimizer_records
 from ipeo.baselines.optional_wrappers import optional_baseline_statuses
 from ipeo.core.ids import stable_hash
 from ipeo.core.io import write_csv, write_jsonl
-from ipeo.core.schemas import GenerationConfig, MethodSelection, PromptCandidate
+from ipeo.core.schemas import EvalResult, GenerationConfig, MethodSelection, PromptCandidate
 from ipeo.effects.invariant_scorer import InvariantScorerConfig, estimate_invariant_effects
 from ipeo.evaluation.cache import ResponseCache
 from ipeo.evaluation.cost_ledger import CostLedger
@@ -26,7 +26,7 @@ from ipeo.methods.fixed_pool import (
     source_average_selection,
     target_only_bo_selection,
 )
-from ipeo.methods.budgeted_ipeo import build_budgeted_source_subset
+from ipeo.methods.budgeted_ipeo import BudgetedPromptCandidate, build_budgeted_source_subset, select_budgeted_prompt
 from ipeo.methods.ipeo_zero import (
     select_composed_vs_existing_prompt,
     select_existing_prompt_by_invariant_score,
@@ -46,6 +46,7 @@ IPEO_BUDGET_METHODS = {
     "ipeo_budget_500": 500,
     "ipeo_budget_1000": 1000,
 }
+IPEO_BUDGET_SELECT_METHOD = "ipeo_budget_select"
 
 
 def parse_args() -> argparse.Namespace:
@@ -218,6 +219,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         budgeted_ipeo_selections: list[MethodSelection] = []
         budgeted_source_calls_by_method: dict[str, int] = {}
         budgeted_dollars_by_method: dict[str, float] = {}
+        budgeted_prompt_candidates: list[BudgetedPromptCandidate] = []
+        budgeted_eval_rows_by_method: dict[str, list[EvalResult]] = {}
         for method_name, budget in sorted(IPEO_BUDGET_METHODS.items(), key=lambda item: item[1]):
             subset = build_budgeted_source_subset(
                 pool=pool,
@@ -276,6 +279,53 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 prompt_ids=set(subset.prompt_ids),
                 example_ids=set(subset.example_ids),
             )
+            budgeted_eval_rows_by_method[method_name] = list(subset.eval_results)
+            budgeted_prompt_candidates.append(
+                BudgetedPromptCandidate(
+                    method=method_name,
+                    requested_budget=budget,
+                    source_calls=subset.source_calls,
+                    prompt=budget_prompt,
+                    selection=budget_selection,
+                    invariant_table=budget_table,
+                )
+            )
+        budget_choice = select_budgeted_prompt(
+            candidates=budgeted_prompt_candidates,
+            task_id=task.task_id,
+            fold_id=fold_id,
+            target_model=args.fold_target,
+            method_name=IPEO_BUDGET_SELECT_METHOD,
+        )
+        budgeted_ipeo_selections.append(budget_choice.selection)
+        unique_eval_rows = {
+            (row.model_id, row.prompt_id, row.example_id): row
+            for candidate in budgeted_prompt_candidates
+            for row in budgeted_eval_rows_by_method.get(candidate.method, [])
+        }
+        budgeted_source_calls_by_method[IPEO_BUDGET_SELECT_METHOD] = len(unique_eval_rows)
+        budgeted_dollars_by_method[IPEO_BUDGET_SELECT_METHOD] = cost_ledger.method_estimated_cost_for_eval_results(
+            "fixed_pool",
+            list(unique_eval_rows.values()),
+            run_id=run_id,
+            phase="baseline_optimization",
+            task_id=task.task_id,
+        )
+        write_jsonl(
+            artifact_dir / "stats" / f"{task.task_id}_{IPEO_BUDGET_SELECT_METHOD}.jsonl",
+            [
+                {
+                    "method": IPEO_BUDGET_SELECT_METHOD,
+                    "chosen_method": budget_choice.chosen_method,
+                    "requested_budget": budget_choice.requested_budget,
+                    "source_calls": budget_choice.source_calls,
+                    "source_score": budget_choice.source_score,
+                    "prompt_id": budget_choice.prompt.prompt_id,
+                    "selected_edit_ids": budget_choice.selection.selected_edit_ids,
+                    "candidate_scores": budget_choice.score_rows,
+                }
+            ],
+        )
 
         selections = [
             original_prompt(task_id=task.task_id, fold_id=fold_id, target_model=args.fold_target, source_models=source_models, pool=pool),

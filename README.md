@@ -110,7 +110,7 @@ for seed in 0 1 2 3 4; do
     --model gpt-4.1-mini \
     --num_prompts 30 \
     --num_examples 48 \
-    --methods ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 miprov2 gepa source_average target_only_bo_fixed_pool best_source_transfer \
+    --methods ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select miprov2 gepa source_average target_only_bo_fixed_pool best_source_transfer \
     --workers 8 \
     --timeout_seconds 300 \
     --max_retries 6 \
@@ -173,7 +173,7 @@ reported as skipped until a compatible `promptolution` runner is wired.
 Useful IPEO ablations:
 
 ```bash
---methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
+--methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_select_existing ipeo_composed_vs_existing ipeo_no_generic ipeo_no_cost ipeo_no_generic_no_cost source_average pooled_source target_only_bo_fixed_pool
 ```
 
 `ipeo_budget_200`, `ipeo_budget_500`, and `ipeo_budget_1000` estimate invariant
@@ -185,6 +185,12 @@ prompt/example/source-model grids; for example, 30 prompts over 3 source
 environments gives 180 calls for `ipeo_budget_200`. When a live run requests
 only budgeted IPEO methods, `run_openai` evaluates only the union of those
 budget grids instead of the full source-train pool.
+
+`ipeo_budget_select` builds the 200/500/1000 budget candidates and chooses one
+using only source-side invariant evidence: selected edit scores, lower
+confidence bounds, sign agreement, rank stability, prompt length, and source
+call cost. It writes `stats/*_ipeo_budget_select.jsonl` so the budget choice is
+auditable.
 
 `ipeo_select_existing` scores each frozen-pool prompt by the sum of invariant
 scores for its edit vector and selects the best existing prompt.
@@ -202,7 +208,7 @@ python -m ipeo.runners.run_openai \
   --model gpt-4.1-mini \
   --num_prompts 30 \
   --num_examples 48 \
-  --methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
+  --methods ipeo_zero ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 ipeo_budget_select ipeo_select_existing ipeo_composed_vs_existing gepa mipro \
   --workers 8 \
   --timeout_seconds 300 \
   --max_retries 6 \

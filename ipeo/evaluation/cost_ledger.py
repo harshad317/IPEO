@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Lock
 
 from ipeo.core.io import read_jsonl, write_jsonl
-from ipeo.core.schemas import CostLog, GenerationConfig, ModelResponse, PromptCandidate
+from ipeo.core.schemas import CostLog, EvalResult, GenerationConfig, ModelResponse, PromptCandidate
 from ipeo.models.base import ModelAdapter
 
 
@@ -126,6 +126,35 @@ class CostLedger:
             prompt_ids=prompt_ids,
             example_ids=example_ids,
         ):
+            total += (
+                float(row.get("input_tokens", 0.0)) / 1000 * float(row.get("api_price_input", 0.0))
+                + float(row.get("output_tokens", 0.0)) / 1000 * float(row.get("api_price_output", 0.0))
+            )
+        return total
+
+    def method_estimated_cost_for_eval_results(
+        self,
+        method: str,
+        eval_results: list[EvalResult],
+        run_id: str | None = None,
+        phase: str | None = None,
+        task_id: str | None = None,
+    ) -> float:
+        """Return fair cost for the exact model/prompt/example rows in eval_results."""
+
+        keys = {
+            (row.model_id, row.prompt_id, row.example_id)
+            for row in eval_results
+        }
+        if not keys:
+            return 0.0
+        total = 0.0
+        counted: set[tuple[str, str, str]] = set()
+        for row in self._matching_rows(method, run_id=run_id, phase=phase, task_id=task_id):
+            key = (str(row.get("model_id")), str(row.get("prompt_id")), str(row.get("example_id")))
+            if key not in keys or key in counted:
+                continue
+            counted.add(key)
             total += (
                 float(row.get("input_tokens", 0.0)) / 1000 * float(row.get("api_price_input", 0.0))
                 + float(row.get("output_tokens", 0.0)) / 1000 * float(row.get("api_price_output", 0.0))

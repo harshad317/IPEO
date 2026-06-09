@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from ipeo.core.ids import stable_hash
-from ipeo.core.schemas import GenerationConfig, InvariantEditStats
+from ipeo.core.schemas import GenerationConfig, InvariantEditStats, MethodSelection
 from ipeo.evaluation.cache import ResponseCache, make_cache_key
 from ipeo.evaluation.cost_ledger import CostLedger
 from ipeo.evaluation.evaluator import evaluate_pool
-from ipeo.methods.budgeted_ipeo import build_budgeted_source_subset, plan_budgeted_source_subset
+from ipeo.methods.budgeted_ipeo import BudgetedPromptCandidate, build_budgeted_source_subset, plan_budgeted_source_subset, select_budgeted_prompt
 from ipeo.methods.ipeo_zero import prompt_invariant_score, select_existing_prompt_by_invariant_score
 from ipeo.models.mock import get_mock_model
 from ipeo.prompts.pool_builder import build_frozen_pool
@@ -203,6 +204,79 @@ def test_budgeted_source_subset_balances_prompts_and_examples(tmp_path: Path) ->
     assert {row.model_id for row in subset.eval_results} == set(source_models)
 
 
+def test_budgeted_prompt_selector_uses_source_only_score(tmp_path: Path) -> None:
+    pool, edits = build_frozen_pool("gsm8k", num_prompts=8, artifact_dir=tmp_path)
+    strong_prompt = pool[1]
+    weak_prompt = pool[0]
+    strong_edit = edits[0]
+    weak_edit = edits[1]
+    strong_prompt = replace(strong_prompt, edit_ids=[strong_edit.edit_id])
+    weak_prompt = replace(weak_prompt, edit_ids=[weak_edit.edit_id])
+    strong_stats = [
+        _invariant_row(strong_edit, score=1.0, lcb=0.5, sign=1.0, rank=1.0),
+        _invariant_row(weak_edit, score=0.1, lcb=-0.2, sign=0.5, rank=0.5),
+    ]
+    weak_stats = [
+        _invariant_row(strong_edit, score=0.1, lcb=-0.2, sign=0.5, rank=0.5),
+        _invariant_row(weak_edit, score=0.2, lcb=-0.1, sign=0.5, rank=0.5),
+    ]
+    candidates = [
+        _budget_candidate("ipeo_budget_200", 200, 180, weak_prompt, [weak_edit.edit_id], weak_stats),
+        _budget_candidate("ipeo_budget_500", 500, 450, strong_prompt, [strong_edit.edit_id], strong_stats),
+    ]
+
+    choice = select_budgeted_prompt(
+        candidates=candidates,
+        task_id="gsm8k",
+        fold_id="fold",
+        target_model="target",
+    )
+
+    assert choice.selection.method == "ipeo_budget_select"
+    assert choice.chosen_method == "ipeo_budget_500"
+    assert choice.selection.prompt_id == strong_prompt.prompt_id
+    assert len(choice.score_rows) == 2
+
+
+def _invariant_row(edit, *, score: float, lcb: float, sign: float, rank: float) -> InvariantEditStats:
+    return InvariantEditStats(
+        task_id="gsm8k",
+        edit_id=edit.edit_id,
+        edit_type=edit.edit_type,
+        token_delta=edit.estimated_token_delta,
+        mean_effect=score,
+        effect_variance=0.0,
+        sign_agreement=sign,
+        rank_stability=rank,
+        lcb_mean_effect=lcb,
+        ipeo_score=score,
+        is_generic=edit.is_generic,
+        is_placebo=edit.is_placebo,
+        per_model_effects={"source": score},
+    )
+
+
+def _budget_candidate(
+    method: str,
+    budget: int,
+    source_calls: int,
+    prompt,
+    edit_ids: list[str],
+    stats: list[InvariantEditStats],
+) -> BudgetedPromptCandidate:
+    selection = MethodSelection(
+        method=method,
+        task_id="gsm8k",
+        fold_id="fold",
+        target_model="target",
+        source_models=["source"],
+        prompt_id=prompt.prompt_id,
+        prompt_text=prompt.text,
+        selected_edit_ids=edit_ids,
+    )
+    return BudgetedPromptCandidate(method, budget, source_calls, prompt, selection, stats)
+
+
 def _eval_row(prompt_id: str, example_id: str, model_id: str):
     from ipeo.core.schemas import EvalResult
 
@@ -283,3 +357,12 @@ def test_cost_ledger_aggregates(tmp_path: Path) -> None:
     assert ledger.method_cost("unit", task_id="ifbench") == 0
     assert ledger.method_calls("unit", task_id="gsm8k", prompt_ids={pool[0].prompt_id}) == 2
     assert ledger.method_calls("unit", run_id="run", task_id="gsm8k", prompt_ids={pool[0].prompt_id}) == 1
+    exact_rows = [_eval_row(pool[0].prompt_id, "ex", model.model_id), _eval_row(pool[0].prompt_id, "ex-cache", model.model_id)]
+    exact_estimated_cost = ledger.method_estimated_cost_for_eval_results(
+        "unit",
+        exact_rows,
+        run_id="run",
+        phase="evaluation",
+        task_id="gsm8k",
+    )
+    assert exact_estimated_cost == run_estimated_cost

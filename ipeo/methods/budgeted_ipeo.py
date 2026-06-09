@@ -5,7 +5,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from ipeo.core.schemas import EvalResult, Example, PromptCandidate
+from ipeo.core.schemas import EvalResult, Example, InvariantEditStats, MethodSelection, PromptCandidate
+from ipeo.models.base import count_tokens
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,27 @@ class BudgetedSourceSubset:
     prompt_ids: list[str]
     example_ids: list[str]
     source_model_ids: list[str]
+
+
+@dataclass(frozen=True)
+class BudgetedPromptCandidate:
+    method: str
+    requested_budget: int
+    source_calls: int
+    prompt: PromptCandidate
+    selection: MethodSelection
+    invariant_table: list[InvariantEditStats]
+
+
+@dataclass(frozen=True)
+class BudgetedPromptChoice:
+    selection: MethodSelection
+    prompt: PromptCandidate
+    chosen_method: str
+    requested_budget: int
+    source_calls: int
+    source_score: float
+    score_rows: list[dict[str, float | int | str]]
 
 
 def plan_budgeted_source_subset(
@@ -120,4 +142,99 @@ def build_budgeted_source_subset(
         prompt_ids=plan.prompt_ids,
         example_ids=plan.example_ids,
         source_model_ids=plan.source_model_ids,
+    )
+
+
+def budget_candidate_source_score(candidate: BudgetedPromptCandidate) -> dict[str, float | int | str]:
+    row_by_edit = {row.edit_id: row for row in candidate.invariant_table}
+    selected_rows = [row_by_edit[edit_id] for edit_id in candidate.selection.selected_edit_ids if edit_id in row_by_edit]
+    edit_count = len(selected_rows)
+    if selected_rows:
+        sum_ipeo = sum(row.ipeo_score for row in selected_rows)
+        mean_lcb = sum(row.lcb_mean_effect for row in selected_rows) / edit_count
+        mean_sign = sum(row.sign_agreement for row in selected_rows) / edit_count
+        mean_rank = sum(row.rank_stability for row in selected_rows) / edit_count
+        mean_variance = sum(row.effect_variance for row in selected_rows) / edit_count
+    else:
+        sum_ipeo = 0.0
+        mean_lcb = 0.0
+        mean_sign = 0.0
+        mean_rank = 0.0
+        mean_variance = 0.0
+    prompt_tokens = count_tokens(candidate.prompt.text)
+    source_call_penalty = (candidate.source_calls / 1000.0) ** 0.5
+    sample_adequacy_bonus = 0.25 * min(candidate.source_calls / 450.0, 1.0)
+    small_sample_penalty = 0.20 if candidate.source_calls < 300 else 0.0
+    large_budget_penalty = 0.15 * max(0.0, (candidate.source_calls - 600) / 400.0)
+    prompt_length_penalty = prompt_tokens / 1000.0
+    score = (
+        sum_ipeo
+        + 0.5 * mean_lcb
+        + 0.25 * mean_sign
+        + 0.10 * mean_rank
+        - 0.25 * mean_variance
+        + sample_adequacy_bonus
+        - small_sample_penalty
+        - large_budget_penalty
+        - 0.05 * source_call_penalty
+        - 0.02 * prompt_length_penalty
+    )
+    return {
+        "method": candidate.method,
+        "requested_budget": candidate.requested_budget,
+        "source_calls": candidate.source_calls,
+        "source_score": float(score),
+        "sum_ipeo_score": float(sum_ipeo),
+        "mean_lcb": float(mean_lcb),
+        "mean_sign_agreement": float(mean_sign),
+        "mean_rank_stability": float(mean_rank),
+        "mean_effect_variance": float(mean_variance),
+        "sample_adequacy_bonus": float(sample_adequacy_bonus),
+        "small_sample_penalty": float(small_sample_penalty),
+        "large_budget_penalty": float(large_budget_penalty),
+        "prompt_tokens": prompt_tokens,
+        "edit_count": edit_count,
+    }
+
+
+def select_budgeted_prompt(
+    *,
+    candidates: list[BudgetedPromptCandidate],
+    task_id: str,
+    fold_id: str,
+    target_model: str,
+    method_name: str = "ipeo_budget_select",
+) -> BudgetedPromptChoice:
+    if not candidates:
+        raise ValueError("candidates must be non-empty")
+    score_rows = [budget_candidate_source_score(candidate) for candidate in candidates]
+    candidate_by_method = {candidate.method: candidate for candidate in candidates}
+    best_row = max(
+        score_rows,
+        key=lambda row: (
+            float(row["source_score"]),
+            -int(row["source_calls"]),
+            -int(row["prompt_tokens"]),
+            str(row["method"]),
+        ),
+    )
+    chosen = candidate_by_method[str(best_row["method"])]
+    selection = MethodSelection(
+        method=method_name,
+        task_id=task_id,
+        fold_id=fold_id,
+        target_model=target_model,
+        source_models=chosen.selection.source_models,
+        prompt_id=chosen.prompt.prompt_id,
+        prompt_text=chosen.prompt.text,
+        selected_edit_ids=chosen.prompt.edit_ids,
+    )
+    return BudgetedPromptChoice(
+        selection=selection,
+        prompt=chosen.prompt,
+        chosen_method=chosen.method,
+        requested_budget=chosen.requested_budget,
+        source_calls=chosen.source_calls,
+        source_score=float(best_row["source_score"]),
+        score_rows=score_rows,
     )

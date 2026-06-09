@@ -10,7 +10,7 @@ from ipeo.baselines.official_optimizers import official_optimizer_records
 from ipeo.baselines.optional_wrappers import optional_baseline_statuses
 from ipeo.core.ids import stable_hash
 from ipeo.core.io import write_csv, write_jsonl
-from ipeo.core.schemas import GenerationConfig, MethodSelection, PromptCandidate
+from ipeo.core.schemas import EvalResult, GenerationConfig, MethodSelection, PromptCandidate
 from ipeo.effects.invariant_scorer import InvariantScorerConfig, estimate_invariant_effects
 from ipeo.evaluation.cache import ResponseCache
 from ipeo.evaluation.cost_ledger import CostLedger
@@ -26,7 +26,12 @@ from ipeo.methods.fixed_pool import (
     source_average_selection,
     target_only_bo_selection,
 )
-from ipeo.methods.budgeted_ipeo import build_budgeted_source_subset, plan_budgeted_source_subset
+from ipeo.methods.budgeted_ipeo import (
+    BudgetedPromptCandidate,
+    build_budgeted_source_subset,
+    plan_budgeted_source_subset,
+    select_budgeted_prompt,
+)
 from ipeo.methods.ipeo_zero import (
     select_composed_vs_existing_prompt,
     select_existing_prompt_by_invariant_score,
@@ -52,7 +57,8 @@ IPEO_BUDGET_METHODS = {
     "ipeo_budget_500": 500,
     "ipeo_budget_1000": 1000,
 }
-IPEO_METHODS = IPEO_COMPOSED_METHODS | set(IPEO_BUDGET_METHODS) | {"ipeo_select_existing", "ipeo_composed_vs_existing"}
+IPEO_BUDGET_SELECT_METHOD = "ipeo_budget_select"
+IPEO_METHODS = IPEO_COMPOSED_METHODS | set(IPEO_BUDGET_METHODS) | {IPEO_BUDGET_SELECT_METHOD, "ipeo_select_existing", "ipeo_composed_vs_existing"}
 FIXED_POOL_METHODS = {
     "original",
     "source_average",
@@ -70,6 +76,7 @@ FIXED_POOL_METHODS = {
     "ipeo_budget_200",
     "ipeo_budget_500",
     "ipeo_budget_1000",
+    "ipeo_budget_select",
     "ipeo_select_existing",
     "ipeo_composed_vs_existing",
 }
@@ -218,6 +225,9 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         test_examples = task.load_split("test", args.num_examples)
 
         budget_method_names = fixed_methods & set(IPEO_BUDGET_METHODS)
+        candidate_budget_method_names = set(budget_method_names)
+        if IPEO_BUDGET_SELECT_METHOD in fixed_methods:
+            candidate_budget_method_names.update(IPEO_BUDGET_METHODS)
         full_ipeo_method_names = fixed_methods & (IPEO_COMPOSED_METHODS | {"ipeo_select_existing", "ipeo_composed_vs_existing"})
         source_validation_method_names = fixed_methods & {
             "source_average",
@@ -237,7 +247,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                 seed=args.seed,
             )
             for method_name, budget in IPEO_BUDGET_METHODS.items()
-            if method_name in budget_method_names
+            if method_name in candidate_budget_method_names
         }
         source_train_pool = pool
         source_train_examples_for_eval = train_examples
@@ -306,6 +316,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
         ipeo_comparison_selection: MethodSelection | None = None
         budgeted_source_calls_by_method: dict[str, int] = {}
         budgeted_dollars_by_method: dict[str, float] = {}
+        budgeted_prompt_candidates: list[BudgetedPromptCandidate] = []
+        budgeted_eval_rows_by_method: dict[str, list[EvalResult]] = {}
         ipeo_methods = fixed_methods & IPEO_METHODS
         if ipeo_methods:
             if full_ipeo_method_names:
@@ -375,7 +387,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     )
                     selections.append(ipeo_comparison_selection)
             for method_name, budget in sorted(IPEO_BUDGET_METHODS.items(), key=lambda item: item[1]):
-                if method_name not in fixed_methods:
+                if method_name not in candidate_budget_method_names:
                     continue
                 subset = build_budgeted_source_subset(
                     pool=pool,
@@ -423,7 +435,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     method_name=method_name,
                 )
                 ipeo_prompts.append(ipeo_prompt)
-                selections.append(ipeo_selection)
+                if method_name in fixed_methods:
+                    selections.append(ipeo_selection)
                 budgeted_source_calls_by_method[method_name] = subset.source_calls
                 budgeted_dollars_by_method[method_name] = cost_ledger.method_estimated_cost(
                     "fixed_pool",
@@ -433,6 +446,54 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     task_id=task.task_id,
                     prompt_ids=set(subset.prompt_ids),
                     example_ids=set(subset.example_ids),
+                )
+                budgeted_eval_rows_by_method[method_name] = list(subset.eval_results)
+                budgeted_prompt_candidates.append(
+                    BudgetedPromptCandidate(
+                        method=method_name,
+                        requested_budget=budget,
+                        source_calls=subset.source_calls,
+                        prompt=ipeo_prompt,
+                        selection=ipeo_selection,
+                        invariant_table=budget_table,
+                    )
+                )
+            if IPEO_BUDGET_SELECT_METHOD in fixed_methods:
+                budget_choice = select_budgeted_prompt(
+                    candidates=budgeted_prompt_candidates,
+                    task_id=task.task_id,
+                    fold_id=fold_id,
+                    target_model=fold_target,
+                    method_name=IPEO_BUDGET_SELECT_METHOD,
+                )
+                selections.append(budget_choice.selection)
+                unique_eval_rows = {
+                    (row.model_id, row.prompt_id, row.example_id): row
+                    for candidate in budgeted_prompt_candidates
+                    for row in budgeted_eval_rows_by_method.get(candidate.method, [])
+                }
+                budgeted_source_calls_by_method[IPEO_BUDGET_SELECT_METHOD] = len(unique_eval_rows)
+                budgeted_dollars_by_method[IPEO_BUDGET_SELECT_METHOD] = cost_ledger.method_estimated_cost_for_eval_results(
+                    "fixed_pool",
+                    list(unique_eval_rows.values()),
+                    run_id=run_id,
+                    phase="baseline_optimization",
+                    task_id=task.task_id,
+                )
+                write_jsonl(
+                    artifact_dir / "stats" / f"{task.task_id}_{IPEO_BUDGET_SELECT_METHOD}.jsonl",
+                    [
+                        {
+                            "method": IPEO_BUDGET_SELECT_METHOD,
+                            "chosen_method": budget_choice.chosen_method,
+                            "requested_budget": budget_choice.requested_budget,
+                            "source_calls": budget_choice.source_calls,
+                            "source_score": budget_choice.source_score,
+                            "prompt_id": budget_choice.prompt.prompt_id,
+                            "selected_edit_ids": budget_choice.selection.selected_edit_ids,
+                            "candidate_scores": budget_choice.score_rows,
+                        }
+                    ],
                 )
 
         if "original" in fixed_methods:
