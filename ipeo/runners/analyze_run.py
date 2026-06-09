@@ -108,7 +108,7 @@ def _print_budget_select_summary(console: Console, rows: list[dict[str, Any]]) -
     if not rows:
         return
     table = Table(title="Budget selector summary")
-    for column in ["task", "selector", "runs", "exact", "regret_free", "regret_ci", "chosen", "oracle"]:
+    for column in ["task", "selector", "runs", "exact", "regret_free", "regret_ci", "call_excess", "chosen", "oracle"]:
         table.add_column(column)
     for row in rows:
         regret_ci = f"{_fmt(row.get('mean_budget_selector_regret'))} [{_fmt(row.get('budget_selector_regret_ci_low'))}, {_fmt(row.get('budget_selector_regret_ci_high'))}]"
@@ -119,6 +119,7 @@ def _print_budget_select_summary(console: Console, rows: list[dict[str, Any]]) -
             _fmt(row.get("selection_accuracy"), digits=2),
             _fmt(row.get("regret_free_rate"), digits=2),
             regret_ci,
+            _fmt(row.get("mean_call_excess_vs_oracle_budget"), digits=1),
             str(row.get("chosen_method_counts", "")),
             str(row.get("oracle_budget_method_counts", "")),
         )

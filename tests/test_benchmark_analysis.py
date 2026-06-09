@@ -130,9 +130,11 @@ def test_analyze_artifact_dir_reports_budget_selector_regret(tmp_path: Path) -> 
     assert decision["chosen_method"] == "ipeo_budget_1000"
     assert decision["oracle_budget_method"] == "ipeo_budget_200"
     assert decision["budget_selector_regret"] == pytest.approx(0.062)
+    assert decision["budget_selector_call_excess"] == 810
     assert decision["budget_selection_outcome"] == "miss"
     summary = outputs["budget_select_summary"][0]
     assert summary["selection_accuracy"] == 0.0
+    assert summary["mean_call_excess_vs_oracle_budget"] == 810
     assert summary["chosen_method_counts"] == "ipeo_budget_1000:1"
     assert (artifact_dir / "stats" / "analysis_budget_select_decisions_ifbench_hard.csv").exists()
     assert read_csv(artifact_dir / "stats" / "analysis_budget_select_summary_ifbench_hard.csv")
@@ -177,10 +179,12 @@ def test_budget_selector_summary_distinguishes_exact_match_from_regret_free_tie(
     assert decision["chosen_method"] == "ipeo_budget_1000"
     assert decision["oracle_budget_method"] == "ipeo_budget_200"
     assert decision["budget_selector_regret"] == 0.0
+    assert decision["budget_selector_call_excess"] == 810
     assert decision["budget_selection_outcome"] == "oracle"
     summary = outputs["budget_select_summary"][0]
     assert summary["selection_accuracy"] == 0.0
     assert summary["regret_free_rate"] == 1.0
+    assert summary["mean_call_excess_vs_oracle_budget"] == 810
 
 
 def test_analyze_artifact_dir_accepts_stats_dir(tmp_path: Path) -> None:

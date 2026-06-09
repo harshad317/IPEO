@@ -68,6 +68,10 @@ def summarize_budget_select_decisions(
         oracle_scores = [_number(row.get("oracle_budget_target_score")) for row in known]
         chosen_calls = [_number(row.get("chosen_source_calls")) for row in task_rows if _has_number(row.get("chosen_source_calls"))]
         oracle_calls = [_number(row.get("oracle_budget_source_calls")) for row in known if _has_number(row.get("oracle_budget_source_calls"))]
+        selector_total_calls = [_number(row.get("selector_total_calls")) for row in task_rows if _has_number(row.get("selector_total_calls"))]
+        oracle_total_calls = [_number(row.get("oracle_budget_total_calls")) for row in known if _has_number(row.get("oracle_budget_total_calls"))]
+        call_excess = [_number(row.get("budget_selector_call_excess")) for row in known if _has_number(row.get("budget_selector_call_excess"))]
+        dollar_excess = [_number(row.get("budget_selector_dollar_excess")) for row in known if _has_number(row.get("budget_selector_dollar_excess"))]
         regret_ci = _ci(_bootstrap_mean_distribution(regrets, n_bootstrap=n_bootstrap, seed=seed + index), confidence_level)
         outputs.append(
             {
@@ -84,6 +88,10 @@ def summarize_budget_select_decisions(
                 "budget_selector_regret_ci_high": regret_ci[1],
                 "mean_chosen_source_calls": _mean(chosen_calls),
                 "mean_oracle_budget_source_calls": _mean(oracle_calls),
+                "mean_selector_total_calls": _mean(selector_total_calls),
+                "mean_oracle_budget_total_calls": _mean(oracle_total_calls),
+                "mean_call_excess_vs_oracle_budget": _mean(call_excess),
+                "mean_dollar_excess_vs_oracle_budget": _mean(dollar_excess),
                 "chosen_method_counts": _counts(row.get("chosen_method") for row in task_rows),
                 "oracle_budget_method_counts": _counts(row.get("oracle_budget_method") for row in known),
             }
@@ -114,7 +122,13 @@ def _decision_row(
     oracle = _oracle_budget_row(scored_candidate_transfers)
     selected_target_score = _optional_number(selected_transfer.get("target_score"))
     oracle_score = _optional_number(oracle.get("target_score"))
+    selector_total_calls = _total_calls(selected_transfer) if selected_transfer else None
+    selector_total_dollars = _optional_number(selected_transfer.get("total_dollars"))
+    oracle_total_calls = _total_calls(oracle) if oracle else None
+    oracle_total_dollars = _optional_number(oracle.get("total_dollars"))
     regret = None if selected_target_score is None or oracle_score is None else max(0.0, oracle_score - selected_target_score)
+    call_excess = None if selector_total_calls is None or oracle_total_calls is None else selector_total_calls - oracle_total_calls
+    dollar_excess = None if selector_total_dollars is None or oracle_total_dollars is None else selector_total_dollars - oracle_total_dollars
     source_rank = _rank_by_method(
         candidate_scores,
         method_key="method",
@@ -137,13 +151,19 @@ def _decision_row(
         "chosen_source_score": _optional_number(audit.get("source_score")),
         "chosen_prompt_id": audit.get("prompt_id", ""),
         "selected_target_score": selected_target_score,
+        "selector_source_calls": _optional_int(selected_transfer.get("source_calls")),
+        "selector_target_calls": _optional_int(selected_transfer.get("target_calls")),
+        "selector_total_calls": selector_total_calls,
+        "selector_total_dollars": selector_total_dollars,
         "chosen_candidate_target_score": _optional_number(chosen_transfer.get("target_score")),
         "oracle_budget_method": oracle.get("method", ""),
         "oracle_budget_target_score": oracle_score,
         "oracle_budget_source_calls": _optional_int(oracle.get("source_calls")),
-        "oracle_budget_total_calls": _total_calls(oracle) if oracle else None,
-        "oracle_budget_total_dollars": _optional_number(oracle.get("total_dollars")),
+        "oracle_budget_total_calls": oracle_total_calls,
+        "oracle_budget_total_dollars": oracle_total_dollars,
         "budget_selector_regret": regret,
+        "budget_selector_call_excess": call_excess,
+        "budget_selector_dollar_excess": dollar_excess,
         "budget_selection_outcome": _selection_outcome(regret),
         "source_score_rank_of_chosen": source_rank.get(chosen_method),
         "source_score_rank_of_oracle": source_rank.get(str(oracle.get("method", ""))),
