@@ -3,6 +3,8 @@ from __future__ import annotations
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from ipeo.core.io import read_csv, write_csv
 from ipeo.runners.analyze_run import run
 from ipeo.stats.benchmark_analysis import analyze_artifact_dir
@@ -84,6 +86,32 @@ def test_bootstrap_comparisons_detect_consistent_score_delta(tmp_path: Path) -> 
     assert comparison["score_delta_ci_low"] > 0
     assert comparison["score_outcome"] == "ipeo"
     assert comparison["probability_ipeo_fewer_calls"] == 1.0
+
+
+def test_analyze_artifact_dir_accepts_stats_dir(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifacts" / "run"
+    write_csv(
+        artifact_dir / "stats" / "transfer_regret.csv",
+        [_row("gsm8k", "ipeo_zero", "zero_target_transfer", 1.0, 100, 0, 0.10)],
+    )
+
+    outputs = analyze_artifact_dir(artifact_dir / "stats", ipeo_methods=["ipeo_zero"], baseline_methods=["all"])
+
+    assert outputs["per_task_winners"][0]["task_id"] == "gsm8k"
+    assert (artifact_dir / "stats" / "analysis_per_task_winners.csv").exists()
+
+
+def test_analyze_artifact_dir_missing_transfer_lists_nearby_runs(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    write_csv(
+        artifact_root / "completed" / "stats" / "transfer_regret.csv",
+        [_row("gsm8k", "ipeo_zero", "zero_target_transfer", 1.0, 100, 0, 0.10)],
+    )
+
+    with pytest.raises(ValueError, match="Nearby transfer_regret.csv files") as exc_info:
+        analyze_artifact_dir(artifact_root / "missing")
+
+    assert "completed" in str(exc_info.value)
 
 
 def _row(

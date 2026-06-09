@@ -60,12 +60,13 @@ def analyze_artifact_dir(
     confidence_level: float = 0.95,
 ) -> dict[str, list[dict[str, Any]]]:
     artifact_path = Path(artifact_dir)
-    transfer_path = artifact_path / "stats" / "transfer_regret.csv"
-    rows = load_transfer_rows(transfer_path)
+    transfer_path = _resolve_transfer_path(artifact_path)
+    all_rows = load_transfer_rows(transfer_path)
+    rows = all_rows
     if focus_task is not None:
         rows = [row for row in rows if row.get("task_id") == focus_task]
     if not rows:
-        raise ValueError(f"No transfer rows found in {transfer_path}")
+        raise ValueError(_transfer_rows_error(artifact_path, transfer_path, all_rows, focus_task))
 
     ipeo_methods = ipeo_methods or DEFAULT_IPEO_METHODS
     baseline_methods = baseline_methods or DEFAULT_BASELINES
@@ -84,15 +85,73 @@ def analyze_artifact_dir(
         ),
         "cost_frontier": cost_frontier(rows),
     }
-    stats_dir = artifact_path / "stats"
+    stats_dir = transfer_path.parent
     for name, output_rows in outputs.items():
         suffix = f"_{focus_task}" if focus_task else ""
         write_csv(stats_dir / f"analysis_{name}{suffix}.csv", output_rows)
     return outputs
 
 
+def _resolve_transfer_path(artifact_path: Path) -> Path:
+    default_path = artifact_path / "stats" / "transfer_regret.csv"
+    if default_path.exists():
+        return default_path
+    direct_stats_path = artifact_path / "transfer_regret.csv"
+    if direct_stats_path.exists():
+        return direct_stats_path
+    return default_path
+
+
 def load_transfer_rows(path: str | Path) -> list[dict[str, Any]]:
     return [_coerce_row(row) for row in read_csv(path)]
+
+
+def _transfer_rows_error(
+    artifact_path: Path,
+    transfer_path: Path,
+    loaded_rows: list[dict[str, Any]],
+    focus_task: str | None,
+) -> str:
+    if focus_task is not None and loaded_rows:
+        available_tasks = ", ".join(sorted({str(row.get("task_id", "")) for row in loaded_rows}))
+        return (
+            f"No transfer rows for --focus_task {focus_task!r} in {transfer_path}. "
+            f"Available tasks: {available_tasks or 'none'}."
+        )
+
+    reason = "missing" if not transfer_path.exists() else "empty"
+    message = [
+        f"No transfer rows found in {transfer_path} ({reason}).",
+        "Point --artifact_dir at a completed run directory that contains stats/transfer_regret.csv,",
+        "or at the stats directory itself.",
+    ]
+    candidates = _nearby_transfer_paths(artifact_path)
+    if candidates:
+        message.append("Nearby transfer_regret.csv files:")
+        for candidate in candidates[:10]:
+            row_count = len(read_csv(candidate))
+            message.append(f"  - {candidate.parent.parent} ({row_count} rows)")
+    else:
+        message.append("No nearby transfer_regret.csv files were found.")
+    return "\n".join(message)
+
+
+def _nearby_transfer_paths(artifact_path: Path) -> list[Path]:
+    roots = []
+    if artifact_path.exists() and artifact_path.is_dir():
+        roots.append(artifact_path)
+    if artifact_path.parent.exists() and artifact_path.parent.is_dir():
+        roots.append(artifact_path.parent)
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    for root in roots:
+        for candidate in sorted(root.glob("**/stats/transfer_regret.csv")):
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            candidates.append(candidate)
+    return candidates
 
 
 def per_task_winners(rows: list[dict[str, Any]], *, best_score_tolerance: float = 1e-9) -> list[dict[str, Any]]:
