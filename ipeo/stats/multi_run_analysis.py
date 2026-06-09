@@ -39,7 +39,7 @@ def analyze_many_artifact_dirs(
 ) -> dict[str, list[dict[str, Any]]]:
     rows, input_runs = load_multi_run_transfer_rows(artifact_dirs, focus_task=focus_task)
     if not rows:
-        raise ValueError("No transfer rows found across the requested artifact directories.")
+        raise ValueError(_multi_run_transfer_rows_error(input_runs, focus_task))
 
     ipeo_methods = ipeo_methods or DEFAULT_IPEO_METHODS
     baseline_methods = baseline_methods or DEFAULT_BASELINES
@@ -92,7 +92,8 @@ def load_multi_run_transfer_rows(
     input_runs: list[dict[str, Any]] = []
     for artifact_dir, run_label in zip([Path(path) for path in artifact_dirs], labels):
         transfer_path = _resolve_transfer_path(artifact_dir)
-        run_rows = load_transfer_rows(transfer_path)
+        all_run_rows = load_transfer_rows(transfer_path)
+        run_rows = all_run_rows
         if focus_task is not None:
             run_rows = [row for row in run_rows if row.get("task_id") == focus_task]
         for row in run_rows:
@@ -106,10 +107,51 @@ def load_multi_run_transfer_rows(
                 "run_label": run_label,
                 "artifact_dir": str(artifact_dir),
                 "transfer_path": str(transfer_path),
+                "transfer_status": _transfer_status(transfer_path, all_run_rows, run_rows, focus_task),
+                "total_row_count": len(all_run_rows),
                 "row_count": len(run_rows),
+                "available_tasks": ",".join(sorted({str(row.get("task_id", "")) for row in all_run_rows})),
             }
         )
     return rows, input_runs
+
+
+def _transfer_status(
+    transfer_path: Path,
+    all_rows: list[dict[str, Any]],
+    filtered_rows: list[dict[str, Any]],
+    focus_task: str | None,
+) -> str:
+    if not transfer_path.exists():
+        return "missing"
+    if not all_rows:
+        return "empty"
+    if focus_task is not None and not filtered_rows:
+        return "filtered_by_focus_task"
+    return "ok"
+
+
+def _multi_run_transfer_rows_error(input_runs: list[dict[str, Any]], focus_task: str | None) -> str:
+    message = ["No transfer rows found across the requested artifact directories."]
+    if focus_task is not None:
+        message.append(f"No rows matched --focus_task {focus_task!r}.")
+    if input_runs:
+        message.append("Input run status:")
+        for row in input_runs:
+            tasks = str(row.get("available_tasks", "")) or "none"
+            message.append(
+                "  - "
+                f"{row.get('artifact_dir')} -> {row.get('transfer_path')} "
+                f"(status={row.get('transfer_status')}, "
+                f"matched_rows={row.get('row_count')}, "
+                f"total_rows={row.get('total_row_count')}, "
+                f"available_tasks={tasks})"
+            )
+    if focus_task is not None:
+        message.append("Use one of the available task ids above, omit --focus_task, or rerun the benchmark for that task.")
+    else:
+        message.append("Run the benchmark first, or point --artifact_dirs at completed run directories containing stats/transfer_regret.csv.")
+    return "\n".join(message)
 
 
 def load_multi_run_budget_select_decisions(

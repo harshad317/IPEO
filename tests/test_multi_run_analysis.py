@@ -94,6 +94,46 @@ def test_analyze_many_runner_reports_unmatched_glob_with_nearby_runs(tmp_path: P
     assert str(completed) in message
 
 
+def test_analyze_many_artifact_dirs_reports_missing_transfer_rows(tmp_path: Path) -> None:
+    missing_run = tmp_path / "missing_seed_0"
+
+    with pytest.raises(ValueError) as exc_info:
+        analyze_many_artifact_dirs(
+            [missing_run],
+            output_dir=tmp_path / "analysis",
+            focus_task="ifbench_hard",
+            ipeo_methods=["ipeo_budget_200"],
+            baseline_methods=["miprov2"],
+        )
+
+    message = str(exc_info.value)
+    assert "No transfer rows found" in message
+    assert "status=missing" in message
+    assert str(missing_run) in message
+
+
+def test_analyze_many_artifact_dirs_reports_focus_task_mismatch(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "seed0"
+    write_csv(
+        artifact_dir / "stats" / "transfer_regret.csv",
+        [_row("gsm8k", "ipeo_budget_200", "zero_target_transfer", 0.9, 180, 0, 0.02)],
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        analyze_many_artifact_dirs(
+            [artifact_dir],
+            output_dir=tmp_path / "analysis",
+            focus_task="ifbench_hard",
+            ipeo_methods=["ipeo_budget_200"],
+            baseline_methods=["miprov2"],
+        )
+
+    message = str(exc_info.value)
+    assert "No rows matched --focus_task 'ifbench_hard'" in message
+    assert "status=filtered_by_focus_task" in message
+    assert "available_tasks=gsm8k" in message
+
+
 def test_analyze_many_reports_budget_selector_regret(tmp_path: Path) -> None:
     seed0 = _write_budget_select_run(
         tmp_path,
