@@ -98,6 +98,55 @@ This writes:
 With `--focus_task`, the files get a task suffix such as
 `stats/analysis_per_task_winners_ifbench_hard.csv`.
 
+## Multi-Seed Analysis
+
+For stability evidence, run the same benchmark across several seeds into
+separate artifact directories:
+
+```bash
+for seed in 0 1 2 3 4; do
+  python -m ipeo.runners.run_openai \
+    --tasks ifbench_hard \
+    --model gpt-4.1-mini \
+    --num_prompts 30 \
+    --num_examples 48 \
+    --methods ipeo_budget_200 ipeo_budget_500 ipeo_budget_1000 miprov2 gepa source_average target_only_bo_fixed_pool best_source_transfer \
+    --workers 8 \
+    --timeout_seconds 300 \
+    --max_retries 6 \
+    --dspy_auto light \
+    --dspy_program auto \
+    --dspy_train_examples 16 \
+    --dspy_val_examples 16 \
+    --dspy_max_bootstrapped_demos 4 \
+    --dspy_max_labeled_demos 4 \
+    --dspy_max_tokens 128 \
+    --seed "$seed" \
+    --progress both \
+    --artifact_dir "artifacts/gpt41mini_ifbench_hard_seed_${seed}" \
+    --cache_dir "artifacts/gpt41mini_ifbench_hard_seed_${seed}/cache" \
+    --cost_log "artifacts/gpt41mini_ifbench_hard_seed_${seed}/costs/run.jsonl"
+done
+```
+
+Then aggregate the completed runs:
+
+```bash
+python -m ipeo.runners.analyze_many \
+  --artifact_glob "artifacts/gpt41mini_ifbench_hard_seed_*" \
+  --output_dir artifacts/gpt41mini_ifbench_hard_multiseed \
+  --focus_task ifbench_hard \
+  --bootstrap_samples 5000 \
+  --confidence_level 0.95
+```
+
+This writes `stats/multi_run_method_summary*.csv`,
+`stats/multi_run_ipeo_vs_baselines*.csv`,
+`stats/multi_run_cost_frontier*.csv`, and
+`stats/multi_run_combined_transfer_rows*.csv`. These reports include mean
+score, bootstrap confidence intervals, score win/tie/loss rate, mean calls,
+mean dollars, and the aggregate cost/performance frontier.
+
 ## Live OpenAI Benchmark
 
 Set `OPENAI_API_KEY` first, then run:
