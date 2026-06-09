@@ -40,6 +40,8 @@ def run(args: argparse.Namespace) -> dict[str, list[dict[str, Any]]]:
         _print_per_task_winners(console, outputs["per_task_winners"])
         _print_track_summary(console, outputs["track_summary"])
         _print_cost_frontier(console, outputs["cost_frontier"])
+        _print_budget_select_summary(console, outputs["budget_select_summary"])
+        _print_budget_select_decisions(console, outputs["budget_select_decisions"])
         _print_bootstrap_comparisons(console, outputs["bootstrap_comparisons"])
         _print_ipeo_deltas(console, outputs["ipeo_vs_baselines"])
         suffix = f" for {args.focus_task}" if args.focus_task else ""
@@ -98,6 +100,44 @@ def _print_cost_frontier(console: Console, rows: list[dict[str, Any]]) -> None:
             _fmt(row.get("target_score")),
             str(int(float(row.get("total_calls", 0) or 0))),
             _fmt(row.get("total_dollars"), digits=6),
+        )
+    console.print(table)
+
+
+def _print_budget_select_summary(console: Console, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    table = Table(title="Budget selector summary")
+    for column in ["task", "runs", "accuracy", "regret_ci", "chosen", "oracle"]:
+        table.add_column(column)
+    for row in rows:
+        regret_ci = f"{_fmt(row.get('mean_budget_selector_regret'))} [{_fmt(row.get('budget_selector_regret_ci_low'))}, {_fmt(row.get('budget_selector_regret_ci_high'))}]"
+        table.add_row(
+            str(row.get("task_id", "")),
+            str(row.get("num_runs", "")),
+            _fmt(row.get("selection_accuracy"), digits=2),
+            regret_ci,
+            str(row.get("chosen_method_counts", "")),
+            str(row.get("oracle_budget_method_counts", "")),
+        )
+    console.print(table)
+
+
+def _print_budget_select_decisions(console: Console, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    table = Table(title="Budget selector decisions")
+    for column in ["task", "chosen", "score", "oracle", "oracle_score", "regret", "outcome"]:
+        table.add_column(column)
+    for row in rows[:20]:
+        table.add_row(
+            str(row.get("task_id", "")),
+            str(row.get("chosen_method", "")),
+            _fmt(row.get("selected_target_score")),
+            str(row.get("oracle_budget_method", "")),
+            _fmt(row.get("oracle_budget_target_score")),
+            _fmt(row.get("budget_selector_regret")),
+            str(row.get("budget_selection_outcome", "")),
         )
     console.print(table)
 

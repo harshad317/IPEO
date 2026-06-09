@@ -22,6 +22,7 @@ from ipeo.stats.benchmark_analysis import (
     _total_calls,
     load_transfer_rows,
 )
+from ipeo.stats.budget_select_analysis import budget_select_decision_rows, summarize_budget_select_decisions
 
 
 def analyze_many_artifact_dirs(
@@ -58,11 +59,19 @@ def analyze_many_artifact_dirs(
         confidence_level=confidence_level,
     )
     frontier_rows = multi_run_cost_frontier(method_rows)
+    budget_select_rows = load_multi_run_budget_select_decisions(artifact_dirs, focus_task=focus_task)
     outputs = {
         "input_runs": input_runs,
         "method_summary": method_rows,
         "ipeo_vs_baselines": comparison_rows,
         "cost_frontier": frontier_rows,
+        "budget_select_decisions": budget_select_rows,
+        "budget_select_summary": summarize_budget_select_decisions(
+            budget_select_rows,
+            n_bootstrap=bootstrap_samples,
+            seed=bootstrap_seed,
+            confidence_level=confidence_level,
+        ),
         "combined_transfer_rows": rows,
     }
 
@@ -101,6 +110,31 @@ def load_multi_run_transfer_rows(
             }
         )
     return rows, input_runs
+
+
+def load_multi_run_budget_select_decisions(
+    artifact_dirs: list[str | Path],
+    *,
+    focus_task: str | None = None,
+) -> list[dict[str, Any]]:
+    labels = _run_labels([Path(path) for path in artifact_dirs])
+    rows: list[dict[str, Any]] = []
+    for artifact_dir, run_label in zip([Path(path) for path in artifact_dirs], labels):
+        transfer_path = _resolve_transfer_path(artifact_dir)
+        run_rows = load_transfer_rows(transfer_path)
+        if focus_task is not None:
+            run_rows = [row for row in run_rows if row.get("task_id") == focus_task]
+        decisions = budget_select_decision_rows(
+            transfer_path.parent,
+            run_rows,
+            focus_task=focus_task,
+            run_label=run_label,
+        )
+        for row in decisions:
+            enriched = dict(row)
+            enriched["artifact_dir"] = str(transfer_path.parent.parent)
+            rows.append(enriched)
+    return rows
 
 
 def multi_run_method_summary(

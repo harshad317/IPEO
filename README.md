@@ -94,6 +94,8 @@ This writes:
 - `stats/analysis_ipeo_vs_baselines.csv`
 - `stats/analysis_bootstrap_comparisons.csv`
 - `stats/analysis_cost_frontier.csv`
+- `stats/analysis_budget_select_decisions.csv`
+- `stats/analysis_budget_select_summary.csv`
 
 With `--focus_task`, the files get a task suffix such as
 `stats/analysis_per_task_winners_ifbench_hard.csv`.
@@ -143,9 +145,13 @@ python -m ipeo.runners.analyze_many \
 This writes `stats/multi_run_method_summary*.csv`,
 `stats/multi_run_ipeo_vs_baselines*.csv`,
 `stats/multi_run_cost_frontier*.csv`, and
-`stats/multi_run_combined_transfer_rows*.csv`. These reports include mean
-score, bootstrap confidence intervals, score win/tie/loss rate, mean calls,
-mean dollars, and the aggregate cost/performance frontier.
+`stats/multi_run_combined_transfer_rows*.csv`. When `ipeo_budget_select` is
+present, it also writes `stats/multi_run_budget_select_decisions*.csv` and
+`stats/multi_run_budget_select_summary*.csv`; these show the chosen budget,
+the best realized budget candidate, selector regret, and chosen/oracle budget
+counts across seeds. These reports include mean score, bootstrap confidence
+intervals, score win/tie/loss rate, mean calls, mean dollars, and the
+aggregate cost/performance frontier.
 
 ## Live OpenAI Benchmark
 
@@ -190,7 +196,9 @@ budget grids instead of the full source-train pool.
 using only source-side invariant evidence: selected edit scores, lower
 confidence bounds, sign agreement, rank stability, prompt length, and source
 call cost. It writes `stats/*_ipeo_budget_select.jsonl` so the budget choice is
-auditable.
+auditable. `analyze_run` and `analyze_many` join that audit file with
+`transfer_regret.csv` to report whether the selector chose the best realized
+budget candidate.
 
 `ipeo_select_existing` scores each frozen-pool prompt by the sum of invariant
 scores for its edit vector and selects the best existing prompt.

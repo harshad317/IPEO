@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ipeo.core.io import read_csv, write_csv
+from ipeo.core.io import read_csv, write_csv, write_jsonl
 from ipeo.runners.analyze_run import run
 from ipeo.stats.benchmark_analysis import analyze_artifact_dir
 
@@ -86,6 +86,56 @@ def test_bootstrap_comparisons_detect_consistent_score_delta(tmp_path: Path) -> 
     assert comparison["score_delta_ci_low"] > 0
     assert comparison["score_outcome"] == "ipeo"
     assert comparison["probability_ipeo_fewer_calls"] == 1.0
+
+
+def test_analyze_artifact_dir_reports_budget_selector_regret(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    write_csv(
+        artifact_dir / "stats" / "transfer_regret.csv",
+        [
+            _row("ifbench_hard", "ipeo_budget_200", "zero_target_transfer", 0.833, 180, 0, 0.02),
+            _row("ifbench_hard", "ipeo_budget_500", "zero_target_transfer", 0.771, 450, 0, 0.04),
+            _row("ifbench_hard", "ipeo_budget_1000", "zero_target_transfer", 0.771, 990, 0, 0.08),
+            _row("ifbench_hard", "ipeo_budget_select", "zero_target_transfer", 0.771, 990, 0, 0.08),
+        ],
+    )
+    write_jsonl(
+        artifact_dir / "stats" / "ifbench_hard_ipeo_budget_select.jsonl",
+        [
+            {
+                "method": "ipeo_budget_select",
+                "chosen_method": "ipeo_budget_1000",
+                "requested_budget": 1000,
+                "source_calls": 990,
+                "source_score": 2.0,
+                "prompt_id": "prompt-1000",
+                "candidate_scores": [
+                    {"method": "ipeo_budget_200", "requested_budget": 200, "source_calls": 180, "source_score": 1.0},
+                    {"method": "ipeo_budget_500", "requested_budget": 500, "source_calls": 450, "source_score": 1.5},
+                    {"method": "ipeo_budget_1000", "requested_budget": 1000, "source_calls": 990, "source_score": 2.0},
+                ],
+            }
+        ],
+    )
+
+    outputs = analyze_artifact_dir(
+        artifact_dir,
+        focus_task="ifbench_hard",
+        ipeo_methods=["ipeo_budget_select"],
+        baseline_methods=["all"],
+        bootstrap_samples=100,
+    )
+
+    decision = outputs["budget_select_decisions"][0]
+    assert decision["chosen_method"] == "ipeo_budget_1000"
+    assert decision["oracle_budget_method"] == "ipeo_budget_200"
+    assert decision["budget_selector_regret"] == pytest.approx(0.062)
+    assert decision["budget_selection_outcome"] == "miss"
+    summary = outputs["budget_select_summary"][0]
+    assert summary["selection_accuracy"] == 0.0
+    assert summary["chosen_method_counts"] == "ipeo_budget_1000:1"
+    assert (artifact_dir / "stats" / "analysis_budget_select_decisions_ifbench_hard.csv").exists()
+    assert read_csv(artifact_dir / "stats" / "analysis_budget_select_summary_ifbench_hard.csv")
 
 
 def test_analyze_artifact_dir_accepts_stats_dir(tmp_path: Path) -> None:

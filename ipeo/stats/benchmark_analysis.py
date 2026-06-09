@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ipeo.core.io import read_csv, write_csv
+from ipeo.stats.budget_select_analysis import budget_select_decision_rows, summarize_budget_select_decisions
 
 FLOAT_FIELDS = {
     "deployment_cost",
@@ -71,6 +72,11 @@ def analyze_artifact_dir(
 
     ipeo_methods = ipeo_methods or DEFAULT_IPEO_METHODS
     baseline_methods = baseline_methods or DEFAULT_BASELINES
+    budget_select_rows = budget_select_decision_rows(
+        transfer_path.parent,
+        rows,
+        focus_task=focus_task,
+    )
     outputs = {
         "per_task_winners": per_task_winners(rows, best_score_tolerance=best_score_tolerance),
         "track_summary": track_summary(rows),
@@ -85,6 +91,13 @@ def analyze_artifact_dir(
             confidence_level=confidence_level,
         ),
         "cost_frontier": cost_frontier(rows),
+        "budget_select_decisions": budget_select_rows,
+        "budget_select_summary": summarize_budget_select_decisions(
+            budget_select_rows,
+            n_bootstrap=bootstrap_samples,
+            seed=bootstrap_seed,
+            confidence_level=confidence_level,
+        ),
     }
     stats_dir = transfer_path.parent
     for name, output_rows in outputs.items():
