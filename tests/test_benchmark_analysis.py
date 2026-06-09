@@ -138,6 +138,51 @@ def test_analyze_artifact_dir_reports_budget_selector_regret(tmp_path: Path) -> 
     assert read_csv(artifact_dir / "stats" / "analysis_budget_select_summary_ifbench_hard.csv")
 
 
+def test_budget_selector_summary_distinguishes_exact_match_from_regret_free_tie(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    write_csv(
+        artifact_dir / "stats" / "transfer_regret.csv",
+        [
+            _row("ifbench_hard", "ipeo_budget_200", "zero_target_transfer", 0.75, 180, 0, 0.02),
+            _row("ifbench_hard", "ipeo_budget_1000", "zero_target_transfer", 0.75, 990, 0, 0.08),
+            _row("ifbench_hard", "ipeo_budget_select", "zero_target_transfer", 0.75, 990, 0, 0.08),
+        ],
+    )
+    write_jsonl(
+        artifact_dir / "stats" / "ifbench_hard_ipeo_budget_select.jsonl",
+        [
+            {
+                "method": "ipeo_budget_select",
+                "chosen_method": "ipeo_budget_1000",
+                "requested_budget": 1000,
+                "source_calls": 990,
+                "source_score": 2.0,
+                "prompt_id": "prompt-1000",
+                "candidate_scores": [
+                    {"method": "ipeo_budget_200", "requested_budget": 200, "source_calls": 180, "source_score": 1.0},
+                    {"method": "ipeo_budget_1000", "requested_budget": 1000, "source_calls": 990, "source_score": 2.0},
+                ],
+            }
+        ],
+    )
+
+    outputs = analyze_artifact_dir(
+        artifact_dir,
+        focus_task="ifbench_hard",
+        ipeo_methods=["ipeo_budget_select"],
+        baseline_methods=["all"],
+    )
+
+    decision = outputs["budget_select_decisions"][0]
+    assert decision["chosen_method"] == "ipeo_budget_1000"
+    assert decision["oracle_budget_method"] == "ipeo_budget_200"
+    assert decision["budget_selector_regret"] == 0.0
+    assert decision["budget_selection_outcome"] == "oracle"
+    summary = outputs["budget_select_summary"][0]
+    assert summary["selection_accuracy"] == 0.0
+    assert summary["regret_free_rate"] == 1.0
+
+
 def test_analyze_artifact_dir_accepts_stats_dir(tmp_path: Path) -> None:
     artifact_dir = tmp_path / "artifacts" / "run"
     write_csv(
