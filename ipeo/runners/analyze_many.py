@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
 def run(args: argparse.Namespace) -> dict[str, list[dict[str, Any]]]:
     artifact_dirs = _artifact_dirs(args.artifact_dirs, args.artifact_glob)
     if not artifact_dirs:
-        raise ValueError("Provide at least one --artifact_dirs path or --artifact_glob pattern.")
+        raise ValueError(_artifact_dirs_error(args.artifact_dirs, args.artifact_glob))
     outputs = analyze_many_artifact_dirs(
         artifact_dirs,
         output_dir=args.output_dir,
@@ -70,6 +70,64 @@ def _artifact_dirs(values: list[str], patterns: list[str]) -> list[str]:
         seen.add(normalized)
         unique.append(normalized)
     return unique
+
+
+def _artifact_dirs_error(values: list[str], patterns: list[str]) -> str:
+    if not values and not patterns:
+        return "Provide at least one --artifact_dirs path or --artifact_glob pattern."
+    message = ["No completed artifact directories were found."]
+    if values:
+        message.append("Provided --artifact_dirs:")
+        for value in values:
+            path = Path(value)
+            status = "exists" if path.exists() else "missing"
+            has_transfer = (path / "stats" / "transfer_regret.csv").exists() or (path / "transfer_regret.csv").exists()
+            message.append(f"  - {value} ({status}, transfer_regret.csv={'yes' if has_transfer else 'no'})")
+    if patterns:
+        message.append("Provided --artifact_glob patterns matched zero directories:")
+        for pattern in patterns:
+            message.append(f"  - {pattern}")
+    nearby = _nearby_transfer_dirs(values, patterns)
+    if nearby:
+        message.append("Nearby completed run directories:")
+        for path in nearby[:10]:
+            message.append(f"  - {path}")
+    else:
+        message.append("No nearby stats/transfer_regret.csv files were found.")
+    message.append("Run the benchmark first, correct the glob, or pass completed run dirs with --artifact_dirs.")
+    return "\n".join(message)
+
+
+def _nearby_transfer_dirs(values: list[str], patterns: list[str]) -> list[Path]:
+    roots: list[Path] = []
+    for value in values:
+        path = Path(value)
+        roots.append(path if path.is_dir() else path.parent)
+    for pattern in patterns:
+        root_text = pattern.split("*", 1)[0]
+        root = Path(root_text).parent if root_text else Path(".")
+        roots.append(root)
+    if not roots:
+        roots.append(Path("."))
+    seen_roots: set[Path] = set()
+    seen_runs: set[Path] = set()
+    runs: list[Path] = []
+    for root in roots:
+        search_root = root if root.exists() and root.is_dir() else root.parent
+        if not search_root.exists() or not search_root.is_dir():
+            continue
+        resolved_root = search_root.resolve()
+        if resolved_root in seen_roots:
+            continue
+        seen_roots.add(resolved_root)
+        for transfer_path in sorted(search_root.glob("**/stats/transfer_regret.csv")):
+            run_dir = transfer_path.parent.parent
+            resolved_run = run_dir.resolve()
+            if resolved_run in seen_runs:
+                continue
+            seen_runs.add(resolved_run)
+            runs.append(run_dir)
+    return runs
 
 
 def _expand_values(values: list[str]) -> list[str]:

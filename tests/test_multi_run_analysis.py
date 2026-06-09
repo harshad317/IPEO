@@ -68,6 +68,32 @@ def test_analyze_many_runner_accepts_artifact_glob(tmp_path: Path) -> None:
     assert comparison["probability_ipeo_fewer_calls"] == 1.0
 
 
+def test_analyze_many_runner_reports_unmatched_glob_with_nearby_runs(tmp_path: Path) -> None:
+    completed = _write_run(tmp_path, "sourceval_seed_0", ipeo_score=0.90, mipro_score=0.80)
+
+    with pytest.raises(ValueError) as exc_info:
+        run(
+            Namespace(
+                artifact_dirs=[],
+                artifact_glob=[str(tmp_path / "missing_seed_*")],
+                output_dir=str(tmp_path / "analysis"),
+                focus_task="ifbench_hard",
+                ipeo_methods=["ipeo_budget_200"],
+                baseline_methods=["miprov2"],
+                bootstrap_samples=100,
+                bootstrap_seed=0,
+                confidence_level=0.95,
+                quiet=True,
+                no_color=True,
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "matched zero directories" in message
+    assert "Nearby completed run directories" in message
+    assert str(completed) in message
+
+
 def test_analyze_many_reports_budget_selector_regret(tmp_path: Path) -> None:
     seed0 = _write_budget_select_run(
         tmp_path,
