@@ -17,6 +17,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--focus_task", default=None)
     parser.add_argument("--ipeo_methods", nargs="+", default=DEFAULT_IPEO_METHODS)
     parser.add_argument("--baseline_methods", nargs="+", default=DEFAULT_BASELINES)
+    parser.add_argument("--bootstrap_samples", type=int, default=1000)
+    parser.add_argument("--bootstrap_seed", type=int, default=0)
+    parser.add_argument("--confidence_level", type=float, default=0.95)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--no_color", action="store_true")
     return parser.parse_args()
@@ -28,12 +31,16 @@ def run(args: argparse.Namespace) -> dict[str, list[dict[str, Any]]]:
         focus_task=args.focus_task,
         ipeo_methods=_expand_values(args.ipeo_methods),
         baseline_methods=_expand_values(args.baseline_methods),
+        bootstrap_samples=args.bootstrap_samples,
+        bootstrap_seed=args.bootstrap_seed,
+        confidence_level=args.confidence_level,
     )
     console = Console(no_color=args.no_color, quiet=args.quiet)
     if not args.quiet:
         _print_per_task_winners(console, outputs["per_task_winners"])
         _print_track_summary(console, outputs["track_summary"])
         _print_cost_frontier(console, outputs["cost_frontier"])
+        _print_bootstrap_comparisons(console, outputs["bootstrap_comparisons"])
         _print_ipeo_deltas(console, outputs["ipeo_vs_baselines"])
         suffix = f" for {args.focus_task}" if args.focus_task else ""
         console.print(f"[bold cyan]Wrote analysis CSVs under {args.artifact_dir}/stats{suffix}.[/bold cyan]")
@@ -91,6 +98,31 @@ def _print_cost_frontier(console: Console, rows: list[dict[str, Any]]) -> None:
             _fmt(row.get("target_score")),
             str(int(float(row.get("total_calls", 0) or 0))),
             _fmt(row.get("total_dollars"), digits=6),
+        )
+    console.print(table)
+
+
+def _print_bootstrap_comparisons(console: Console, rows: list[dict[str, Any]]) -> None:
+    table = Table(title="Bootstrap IPEO comparisons")
+    for column in ["ipeo", "baseline", "tasks", "score_delta_ci", "call_delta", "dollar_delta", "score_outcome"]:
+        table.add_column(column)
+    sorted_rows = sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("ipeo_method", "")),
+            str(row.get("baseline_method", "")),
+        ),
+    )
+    for row in sorted_rows[:30]:
+        score_ci = f"{_fmt(row.get('mean_score_delta'))} [{_fmt(row.get('score_delta_ci_low'))}, {_fmt(row.get('score_delta_ci_high'))}]"
+        table.add_row(
+            str(row.get("ipeo_method", "")),
+            str(row.get("baseline_method", "")),
+            str(row.get("num_tasks", "")),
+            score_ci,
+            _fmt(row.get("mean_call_delta"), digits=1),
+            _fmt(row.get("mean_dollar_delta"), digits=6),
+            str(row.get("score_outcome", "")),
         )
     console.print(table)
 

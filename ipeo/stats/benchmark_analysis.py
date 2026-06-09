@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,9 @@ def analyze_artifact_dir(
     ipeo_methods: list[str] | None = None,
     baseline_methods: list[str] | None = None,
     best_score_tolerance: float = 1e-9,
+    bootstrap_samples: int = 1000,
+    bootstrap_seed: int = 0,
+    confidence_level: float = 0.95,
 ) -> dict[str, list[dict[str, Any]]]:
     artifact_path = Path(artifact_dir)
     transfer_path = artifact_path / "stats" / "transfer_regret.csv"
@@ -70,6 +74,14 @@ def analyze_artifact_dir(
         "track_summary": track_summary(rows),
         "method_task_summary": method_task_summary(rows),
         "ipeo_vs_baselines": ipeo_vs_baselines(rows, ipeo_methods=ipeo_methods, baseline_methods=baseline_methods),
+        "bootstrap_comparisons": bootstrap_comparisons(
+            rows,
+            ipeo_methods=ipeo_methods,
+            baseline_methods=baseline_methods,
+            n_bootstrap=bootstrap_samples,
+            seed=bootstrap_seed,
+            confidence_level=confidence_level,
+        ),
         "cost_frontier": cost_frontier(rows),
     }
     stats_dir = artifact_path / "stats"
@@ -191,6 +203,74 @@ def ipeo_vs_baselines(
     return outputs
 
 
+def bootstrap_comparisons(
+    rows: list[dict[str, Any]],
+    *,
+    ipeo_methods: list[str],
+    baseline_methods: list[str],
+    n_bootstrap: int = 1000,
+    seed: int = 0,
+    confidence_level: float = 0.95,
+) -> list[dict[str, Any]]:
+    grouped = _group_by(rows, "task_id")
+    paired: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for task_id, task_rows in sorted(grouped.items()):
+        baselines = _baseline_rows(task_rows, baseline_methods)
+        for ipeo_method in ipeo_methods:
+            ipeo = next((row for row in task_rows if row.get("method") == ipeo_method), None)
+            if ipeo is None:
+                continue
+            for baseline in baselines:
+                baseline_method = str(baseline.get("method", ""))
+                paired[(ipeo_method, baseline_method)].append(
+                    {
+                        "task_id": task_id,
+                        "ipeo_score": _float(ipeo, "target_score"),
+                        "baseline_score": _float(baseline, "target_score"),
+                        "score_delta": _float(ipeo, "target_score") - _float(baseline, "target_score"),
+                        "call_delta": _total_calls(ipeo) - _total_calls(baseline),
+                        "dollar_delta": _float(ipeo, "total_dollars") - _float(baseline, "total_dollars"),
+                    }
+                )
+
+    outputs: list[dict[str, Any]] = []
+    for pair_index, ((ipeo_method, baseline_method), pair_rows) in enumerate(sorted(paired.items())):
+        score_deltas = [float(row["score_delta"]) for row in pair_rows]
+        call_deltas = [float(row["call_delta"]) for row in pair_rows]
+        dollar_deltas = [float(row["dollar_delta"]) for row in pair_rows]
+        score_dist = _bootstrap_mean_distribution(score_deltas, n_bootstrap=n_bootstrap, seed=seed + pair_index * 3)
+        call_dist = _bootstrap_mean_distribution(call_deltas, n_bootstrap=n_bootstrap, seed=seed + pair_index * 3 + 1)
+        dollar_dist = _bootstrap_mean_distribution(dollar_deltas, n_bootstrap=n_bootstrap, seed=seed + pair_index * 3 + 2)
+        score_ci = _ci(score_dist, confidence_level)
+        call_ci = _ci(call_dist, confidence_level)
+        dollar_ci = _ci(dollar_dist, confidence_level)
+        outputs.append(
+            {
+                "ipeo_method": ipeo_method,
+                "baseline_method": baseline_method,
+                "num_tasks": len(pair_rows),
+                "tasks": ",".join(str(row["task_id"]) for row in pair_rows),
+                "mean_ipeo_score": _mean(row["ipeo_score"] for row in pair_rows),
+                "mean_baseline_score": _mean(row["baseline_score"] for row in pair_rows),
+                "mean_score_delta": _mean(score_deltas),
+                "score_delta_ci_low": score_ci[0],
+                "score_delta_ci_high": score_ci[1],
+                "probability_ipeo_score_better": _probability(score_dist, lambda value: value > 0.0),
+                "score_outcome": _ci_outcome(score_ci),
+                "mean_call_delta": _mean(call_deltas),
+                "call_delta_ci_low": call_ci[0],
+                "call_delta_ci_high": call_ci[1],
+                "probability_ipeo_fewer_calls": _probability(call_dist, lambda value: value < 0.0),
+                "mean_dollar_delta": _mean(dollar_deltas),
+                "dollar_delta_ci_low": dollar_ci[0],
+                "dollar_delta_ci_high": dollar_ci[1],
+                "probability_ipeo_cheaper": _probability(dollar_dist, lambda value: value < 0.0),
+                "cost_outcome": _cost_ci_outcome(dollar_ci),
+            }
+        )
+    return sorted(outputs, key=lambda row: (str(row["ipeo_method"]), str(row["baseline_method"])))
+
+
 def _baseline_rows(rows: list[dict[str, Any]], baseline_methods: list[str]) -> list[dict[str, Any]]:
     methods = set(baseline_methods)
     if "all" in methods:
@@ -278,6 +358,52 @@ def _winner(score_delta: float, tolerance: float = 1e-9) -> str:
     if score_delta < -tolerance:
         return "baseline"
     return "tie"
+
+
+def _ci_outcome(ci: tuple[float, float], tolerance: float = 1e-9) -> str:
+    if ci[0] > tolerance:
+        return "ipeo"
+    if ci[1] < -tolerance:
+        return "baseline"
+    return "uncertain"
+
+
+def _cost_ci_outcome(ci: tuple[float, float], tolerance: float = 1e-12) -> str:
+    if ci[1] < -tolerance:
+        return "ipeo_cheaper"
+    if ci[0] > tolerance:
+        return "baseline_cheaper"
+    return "uncertain"
+
+
+def _bootstrap_mean_distribution(values: list[float], *, n_bootstrap: int, seed: int) -> list[float]:
+    if not values:
+        return [0.0]
+    if n_bootstrap <= 0:
+        return [_mean(values)]
+    rng = random.Random(seed)
+    distribution: list[float] = []
+    for _ in range(n_bootstrap):
+        sample = [values[rng.randrange(len(values))] for _ in values]
+        distribution.append(_mean(sample))
+    return distribution
+
+
+def _ci(values: list[float], confidence_level: float) -> tuple[float, float]:
+    if not values:
+        return (0.0, 0.0)
+    clipped = min(max(confidence_level, 0.0), 1.0)
+    alpha = (1.0 - clipped) / 2.0
+    ordered = sorted(values)
+    lo_index = int(alpha * (len(ordered) - 1))
+    hi_index = int((1.0 - alpha) * (len(ordered) - 1))
+    return (ordered[lo_index], ordered[hi_index])
+
+
+def _probability(values: list[float], predicate: Any) -> float:
+    if not values:
+        return 0.0
+    return sum(1 for value in values if predicate(value)) / len(values)
 
 
 def _mean(values: Any) -> float:

@@ -65,12 +65,18 @@ fairly in the benchmark reports.
 ## Analyze A Completed Run
 
 After a benchmark finishes, summarize per-task winners, benchmark tracks,
-cost/performance frontier rows, and IPEO-vs-baseline deltas:
+cost/performance frontier rows, IPEO-vs-baseline deltas, and bootstrap
+confidence intervals over task-level paired deltas:
 
 ```bash
 python -m ipeo.runners.analyze_run \
   --artifact_dir artifacts/gpt41mini_fair_split_v1
 ```
+
+Use `--bootstrap_samples`, `--bootstrap_seed`, and `--confidence_level` to
+control the deterministic bootstrap summary. These intervals are over tasks in
+the completed artifact directory; run multiple seeds when you need true
+seed-level stability evidence.
 
 Focus on one stress task:
 
@@ -86,6 +92,7 @@ This writes:
 - `stats/analysis_track_summary.csv`
 - `stats/analysis_method_task_summary.csv`
 - `stats/analysis_ipeo_vs_baselines.csv`
+- `stats/analysis_bootstrap_comparisons.csv`
 - `stats/analysis_cost_frontier.csv`
 
 With `--focus_task`, the files get a task suffix such as
